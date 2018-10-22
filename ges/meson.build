@@ -1,4 +1,4 @@
-ges_sources = [
+ges_sources = files([
     'ges.c',
     'ges-enums.c',
     'ges-meta-container.c',
@@ -61,9 +61,9 @@ ges_sources = [
     'ges-structured-interface.c',
     'ges-structure-parser.c',
     'gstframepositioner.c'
-]
+])
 
-ges_headers = [
+ges_headers = files([
     'ges-types.h',
     'ges.h',
     'ges-prelude.h',
@@ -122,7 +122,7 @@ ges_headers = [
     'ges-effect-asset.h',
     'ges-utils.h',
     'ges-group.h'
-]
+])
 
 if libxml_dep.found()
   ges_sources += ['ges-pitivi-formatter.c']
@@ -176,7 +176,7 @@ if build_gir
       '-I' + meson.current_build_dir() + '/..',
       '--cflags-end']
     endif
-    ges_gen_sources += [gnome.generate_gir(libges,
+    ges_gir = gnome.generate_gir(libges,
         sources : ges_sources + ges_headers,
         namespace : 'GES',
         nsversion : apiversion,
@@ -187,7 +187,9 @@ if build_gir
         install : true,
         dependencies : libges_deps,
         extra_args : ges_gir_extra_args
-    )]
+    )
+
+    ges_gen_sources += [ges_gir]
 endif
 
 ges_dep = declare_dependency(link_with : libges,
