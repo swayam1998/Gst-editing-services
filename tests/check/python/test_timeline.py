@@ -174,6 +174,125 @@ class TestEditing(common.GESSimpleTimelineTest):
         self.assertEquals(len(self.layer.get_clips()), 4)
 
 
+class TestInvalidOverlaps(common.GESSimpleTimelineTest):
+
+    def check_add_move_clip(self, start, duration):
+        self.timeline.props.auto_transition = True
+        self.layer.props.auto_transition = True
+        clip2 = GES.TestClip()
+        clip2.props.start = start
+        clip2.props.duration = duration
+        self.assertFalse(self.layer.add_clip(clip2))
+        self.assertEquals(len(self.layer.get_clips()), 1)
+
+        # Add the clip at a different position.
+        clip2.props.start = 25
+        self.assertTrue(self.layer.add_clip(clip2))
+
+        # Try to move the second clip by setting the start prop.
+        #???clip2.props.start = start
+        # Check moving did not work.
+        self.assertEqual(clip2.props.start, 25)
+
+        # Try to move the second clip by editing it.
+        self.assertFalse(clip2.edit([], -1, GES.EditMode.EDIT_NORMAL, GES.Edge.EDGE_NONE, start))
+        self.assertEqual(clip2.props.start, 25)
+
+        # Try to put it in a group and move the group.
+        clip3 = GES.TestClip()
+        clip3.props.start = 20
+        clip3.props.duration = 1
+        self.assertTrue(self.layer.add_clip(clip3))
+        group = GES.Container.group([clip3, clip2])
+        self.assertTrue(group.props.start, 20)
+        self.assertFalse(group.edit([], -1, GES.EditMode.EDIT_NORMAL, GES.Edge.EDGE_NONE, start - 5))
+        self.assertEqual(group.props.start, 20)
+        self.assertEqual(clip3.props.start, 20)
+        self.assertEqual(clip2.props.start, 25)
+
+        for clip in group.ungroup(False):
+            self.assertTrue(self.layer.remove_clip(clip))
+
+    def test_adding_or_moving(self):
+        clip1 = self.add_clip(start=10, in_point=0, duration=3)
+
+        # clip1 is the same size...
+        self.check_add_move_clip(start=10, duration=3)
+
+        # clip1 is contained by...
+        self.check_add_move_clip(start=9, duration=4)
+        self.check_add_move_clip(start=9, duration=5)
+        self.check_add_move_clip(start=10, duration=4)
+
+        # clip1 contains...
+        self.check_add_move_clip(start=10, duration=1)
+        self.check_add_move_clip(start=11, duration=1)
+        self.check_add_move_clip(start=12, duration=1)
+
+    def test_splitting(self):
+        clip1 = self.add_clip(start=9, in_point=0, duration=3)
+        clip2 = self.add_clip(start=10, in_point=0, duration=4)
+        clip3 = self.add_clip(start=12, in_point=0, duration=3)
+
+        self.assertIsNone(clip1.split(10))
+        self.assertIsNone(clip1.split(11))
+
+        self.assertIsNone(clip3.split(13))
+        self.assertIsNone(clip3.split(14))
+
+    def test_changing_duration(self):
+        clip1 = self.add_clip(start=9, in_point=0, duration=2)
+        clip2 = self.add_clip(start=10, in_point=0, duration=2)
+
+        # clip1's end edge to the right, to increase its duration.
+        #???clip1.props.duration = 3
+        #???self.assertEquals(clip1.props.duration, 2)
+        self.assertFalse(clip1.edit([], -1, GES.EditMode.EDIT_TRIM, GES.Edge.EDGE_END, clip2.props.start + clip2.props.duration))
+        self.assertFalse(clip1.ripple_end(clip2.props.start + clip2.props.duration))
+        self.assertFalse(clip1.roll_end(clip2.props.start + clip2.props.duration))
+
+        # clip2's end edge to the left, to decrease its duration.
+        #???clip2.props.duration = 1
+        #???self.assertEquals(clip1.props.duration, 2)
+        self.assertFalse(clip2.edit([], -1, GES.EditMode.EDIT_TRIM, GES.Edge.EDGE_END, clip1.props.start + clip1.props.duration))
+        self.assertFalse(clip2.ripple_end(clip1.props.start + clip1.props.duration))
+        self.assertFalse(clip2.roll_end(clip1.props.start + clip1.props.duration))
+
+        # clip2's start edge to the left, to increase its duration.
+        self.assertFalse(clip2.edit([], -1, GES.EditMode.EDIT_TRIM, GES.Edge.EDGE_START, clip1.props.start))
+        self.assertFalse(clip2.trim(clip1.props.start))
+
+        # clip1's start edge to the right, to decrease its duration.
+        self.assertFalse(clip1.edit([], -1, GES.EditMode.EDIT_TRIM, GES.Edge.EDGE_START, clip2.props.start))
+        self.assertFalse(clip1.trim(clip2.props.start))
+
+    def test_rolling(self):
+        clip1 = self.add_clip(start=9, in_point=0, duration=2)
+        clip2 = self.add_clip(start=10, in_point=0, duration=2)
+        clip3 = self.add_clip(start=11, in_point=0, duration=2)
+
+        # Rolling clip1's end -1 would lead to clip3 to overlap 100% with clip2.
+        self.assertFalse(clip1.edit([], -1, GES.EditMode.EDIT_ROLL, GES.Edge.EDGE_END, clip1.props.start + clip1.props.duration - 1))
+        self.assertFalse(clip1.roll_end(clip1.props.start + clip1.props.duration - 1))
+
+        # Rolling clip3's start +1 would lead to clip1 to overlap 100% with clip2.
+        self.assertFalse(clip3.edit([], -1, GES.EditMode.EDIT_ROLL, GES.Edge.EDGE_START, clip3.props.start + 1))
+        self.assertFalse(clip3.roll(clip3.props.start + 1))
+
+    def test_rippling(self):
+        clip1 = self.add_clip(start=9, in_point=0, duration=2)
+        clip2 = self.add_clip(start=10, in_point=0, duration=2)
+        clip3 = self.add_clip(start=11, in_point=0, duration=2)
+
+        # Rippling clip2's start -2 would bring clip3 exactly on top of clip1.
+        self.assertFalse(clip2.edit([], -1, GES.EditMode.EDIT_RIPPLE, GES.Edge.EDGE_START, 8))
+        self.assertFalse(clip2.ripple(8))
+
+        # Rippling clip1's end -1 would bring clip3 exactly on top of clip2.
+        self.assertFalse(clip1.edit([], -1, GES.EditMode.EDIT_RIPPLE, GES.Edge.EDGE_END, 8))
+        self.assertFalse(clip1.ripple_end(8))
+
+
 class TestSnapping(common.GESSimpleTimelineTest):
 
     def test_snapping(self):
@@ -213,6 +332,7 @@ class TestSnapping(common.GESSimpleTimelineTest):
         self.assertEqual(len(self.layer.get_clips()), 2)
         self.assertEqual(clip1.props.duration, split_position)
         self.assertEqual(clip2.props.start, split_position)
+
 
 class TestTransitions(common.GESSimpleTimelineTest):
 
@@ -313,7 +433,7 @@ class TestTransitions(common.GESSimpleTimelineTest):
             self.assertEqual(len(clips), 4)
 
 
-class TestPriorities(GESSimpleTimelineTest):
+class TestPriorities(common.GESSimpleTimelineTest):
 
     def test_clips_priorities(self):
         clip = self.add_clip(0, 0, 100)

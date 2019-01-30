@@ -266,6 +266,47 @@ ges_layer_resync_priorities_by_type (GESLayer * layer,
   return max_priority;
 }
 
+static gboolean
+ges_layer_can_add_clip (GESLayer *layer, GESClip *clip)
+{
+  GList *tmp;
+  GstClockTime start, end;
+
+  layer->priv->clips_start =
+      g_list_sort (layer->priv->clips_start,
+      (GCompareFunc) element_start_compare);
+
+  start = GES_TIMELINE_ELEMENT_START (clip);
+  end = start + GES_TIMELINE_ELEMENT_DURATION (clip);
+  for (tmp = layer->priv->clips_start; tmp; tmp = tmp->next) {
+    GstClockTime cclip_start, cclip_end;
+
+    cclip_start = ges_timeline_element_get_start (tmp->data);
+    cclip_end = cclip_start + ges_timeline_element_get_duration (tmp->data);
+
+    GST_ERROR_OBJECT(layer, "Main clip %" GES_TIMELINE_ELEMENT_FORMAT
+      " current clip: %" GES_TIMELINE_ELEMENT_FORMAT,
+      GES_TIMELINE_ELEMENT_ARGS (clip),
+      GES_TIMELINE_ELEMENT_ARGS (tmp->data));
+
+    if (start > cclip_end || cclip_start > end) {
+      continue;
+    } else if ((start >= cclip_start && cclip_end <= end) ||
+          (cclip_start >= start && cclip_end <= end)) {
+      GST_ERROR_OBJECT(layer, "Can't add clip %" GES_TIMELINE_ELEMENT_FORMAT
+        " as it would fully overlap with %" GES_TIMELINE_ELEMENT_FORMAT,
+        GES_TIMELINE_ELEMENT_ARGS (clip),
+        GES_TIMELINE_ELEMENT_ARGS (tmp->data));
+
+        return FALSE;
+    }
+  }
+
+  GST_ERROR("GO");
+
+  return TRUE;
+}
+
 /**
  * ges_layer_resync_priorities:
  * @layer: a #GESLayer
@@ -591,6 +632,9 @@ ges_layer_add_clip (GESLayer * layer, GESClip * clip)
 
     return FALSE;
   }
+
+  if (!ges_layer_can_add_clip(layer, clip))
+    return FALSE;
 
   asset = ges_extractable_get_asset (GES_EXTRACTABLE (clip));
   if (asset == NULL) {

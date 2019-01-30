@@ -959,7 +959,6 @@ _create_auto_transition_from_transitions (GESTimeline * timeline,
       _find_transition_from_auto_transitions (timeline, layer, track, prev,
       next, transition_duration);
 
-
   if (auto_transition) {
     if (timeline->priv->needs_rollback) {
       GST_WARNING_OBJECT (timeline,
@@ -971,7 +970,6 @@ _create_auto_transition_from_transitions (GESTimeline * timeline,
     }
     return auto_transition;
   }
-
 
   /* Try to find a transition that perfectly fits with the one that
    * should be added at that place
@@ -1078,14 +1076,19 @@ _create_transitions_on_layer (GESTimeline * timeline, GESLayer * layer,
         continue;
 
       transition_duration = (_START (prev) + _DURATION (prev)) - _START (next);
-      if (transition_duration > 0 && transition_duration < _DURATION (prev) &&
-          transition_duration < _DURATION (next)) {
-        transition =
-            get_auto_transition (timeline, layer, ctrack, prev, next,
-            transition_duration);
-        if (!transition)
-          create_transition (timeline, prev, next, NULL, layer,
-              _START (next), transition_duration);
+      if (transition_duration == 0) {
+        timeline->priv->needs_rollback = TRUE;
+      } else if (transition_duration > 0) {
+        if (transition_duration < _DURATION (prev) && transition_duration < _DURATION (next)) {
+          transition =
+              get_auto_transition (timeline, layer, ctrack, prev, next,
+              transition_duration);
+          if (!transition)
+            create_transition (timeline, prev, next, NULL, layer,
+                _START (next), transition_duration);
+        } else if (transition_duration <= _DURATION (next)) {
+          timeline->priv->needs_rollback = TRUE;
+        }
       }
     }
 
