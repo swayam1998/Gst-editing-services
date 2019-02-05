@@ -116,7 +116,14 @@ _emit_loaded_in_idle (EmitLoadedInIdle * data)
   return FALSE;
 }
 
-static void
+/**
+ * ges_project_add_formatter:
+ * @project: The project to add a formatter to
+ * @formatter: A formatter used by @project
+ *
+ * Adds a formatter as used to load @project
+ */
+void
 ges_project_add_formatter (GESProject * project, GESFormatter * formatter)
 {
   GESProjectPrivate *priv = GES_PROJECT (project)->priv;
