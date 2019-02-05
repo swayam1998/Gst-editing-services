@@ -504,6 +504,11 @@ _init_formatter_assets (void)
   GType *formatters;
   guint n_formatters;
 
+  GstPlugin *python_plugin = gst_plugin_load_by_name ("python");
+
+  if (python_plugin)
+    gst_object_unref (python_plugin);
+
   formatters = g_type_children (GES_TYPE_FORMATTER, &n_formatters);
   _list_formatters (formatters, n_formatters);
   g_free (formatters);
