@@ -175,6 +175,15 @@ class GESSimpleTimelineTest(GESTest):
 
         return clip
 
+    def append_clip(self, layer=0):
+        layer = self.timeline.get_layers()[layer]
+        clip = GES.TestClip()
+        clip.props.start = layer.get_duration()
+        clip.props.duration = 10
+        self.assertTrue(layer.add_clip(clip))
+
+        return clip
+
     def assertTimelineTopology(self, topology):
         res = []
         for layer in self.timeline.get_layers():

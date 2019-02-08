@@ -83,6 +83,9 @@ G_STMT_START {                                          \
 #define _DURATION(obj) GES_TIMELINE_ELEMENT_DURATION (obj)
 #define _INPOINT(obj) GES_TIMELINE_ELEMENT_INPOINT (obj)
 #define _PRIORITY(obj) GES_TIMELINE_ELEMENT_PRIORITY (obj)
+#ifndef _END
+#define _END(obj) (_START(obj) + _DURATION(obj))
+#endif
 
 #define CHECK_OBJECT_PROPS(obj, start, inpoint, duration) {\
   assert_equals_uint64 (_START (obj), start);\
@@ -100,7 +103,7 @@ G_STMT_START {                                          \
     "s<%p>" \
     " [ %" GST_TIME_FORMAT \
     " (%" GST_TIME_FORMAT \
-    ") - %" GST_TIME_FORMAT "]"
+    ") - %" GST_TIME_FORMAT "] "
 
 #define GES_TIMELINE_ELEMENT_ARGS(element) \
     GES_TIMELINE_ELEMENT_NAME(element), element, \

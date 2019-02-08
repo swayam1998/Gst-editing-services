@@ -48,6 +48,7 @@
 #include "ges-project.h"
 #include "ges-container.h"
 #include "ges-timeline.h"
+#include "ges-timeline-tree.h"
 #include "ges-track.h"
 #include "ges-layer.h"
 #include "ges-auto-transition.h"
@@ -152,6 +153,8 @@ struct _MoveContext
 
 struct _GESTimelinePrivate
 {
+  GNode *tree;
+
   /* The duration of the timeline */
   gint64 duration;
 
@@ -401,6 +404,7 @@ ges_timeline_finalize (GObject * object)
   GESTimeline *tl = GES_TIMELINE (object);
 
   g_rec_mutex_clear (&tl->priv->dyn_mutex);
+  g_node_destroy (tl->priv->tree);
 
   G_OBJECT_CLASS (ges_timeline_parent_class)->finalize (object);
 }
@@ -486,6 +490,7 @@ ges_timeline_class_init (GESTimelineClass * klass)
 
   GST_DEBUG_CATEGORY_INIT (ges_timeline_debug, "gestimeline",
       GST_DEBUG_FG_YELLOW, "ges timeline");
+  timeline_tree_init_debug();
 
   parent_class = g_type_class_peek_parent (klass);
 
@@ -666,6 +671,7 @@ ges_timeline_init (GESTimeline * self)
   GESTimelinePrivate *priv = self->priv;
 
   self->priv = ges_timeline_get_instance_private (self);
+  self->priv->tree = g_node_new (self);
 
   priv = self->priv;
   self->layers = NULL;
@@ -1613,6 +1619,7 @@ ges_timeline_trim_object_simple (GESTimeline * timeline,
   guint64 start, inpoint, duration, max_duration, *snapped, *cur;
   gboolean ret = TRUE;
   gint64 real_dur;
+  MoveContext *mv_ctx = &timeline->priv->movecontext;
   GESTrackElement *track_element;
 
   if (GES_IS_TRANSITION (element)) {
@@ -1620,6 +1627,7 @@ ges_timeline_trim_object_simple (GESTimeline * timeline,
         ges_clip_get_layer (GES_CLIP (GES_TIMELINE_ELEMENT_PARENT (element))),
         GES_TRACK_ELEMENT (element), edge, position);
   } else if (GES_IS_SOURCE (element) == FALSE) {
+    GST_DEBUG_OBJECT (element, "is not a source.");
     return FALSE;
   }
 
@@ -1704,6 +1712,13 @@ ges_timeline_trim_object_simple (GESTimeline * timeline,
         return FALSE;
       }
 
+      if (!timeline_tree_can_move_element (timeline->priv->tree, element,
+              _PRIORITY (track_element) / LAYER_HEIGHT, position, duration,
+              mv_ctx->moving_trackelements)) {
+        GST_INFO_OBJECT (track_element, "Can't move.");
+        return FALSE;
+      }
+
       timeline->priv->needs_transitions_update = FALSE;
       _set_start0 (GES_TIMELINE_ELEMENT (track_element), position);
       _set_inpoint0 (GES_TIMELINE_ELEMENT (track_element), inpoint);
@@ -1731,6 +1746,13 @@ ges_timeline_trim_object_simple (GESTimeline * timeline,
 
       if (duration == 0) {
         GST_INFO_OBJECT (timeline, "Duration would be 0, not rippling");
+        return FALSE;
+      }
+
+      if (!timeline_tree_can_move_element (timeline->priv->tree, element,
+              _PRIORITY (track_element) / LAYER_HEIGHT, start, duration,
+              mv_ctx->moving_trackelements)) {
+        GST_INFO_OBJECT (track_element, "can't move.");
         return FALSE;
       }
 
@@ -1779,11 +1801,26 @@ timeline_ripple_object (GESTimeline * timeline, GESTrackElement * obj,
       if (snapped)
         position = *snapped;
 
+      if (!timeline_tree_can_move_element (timeline->priv->tree,
+              GES_TIMELINE_ELEMENT (obj),
+              _PRIORITY (obj) / LAYER_HEIGHT, position, _DURATION (obj),
+              mv_ctx->moving_trackelements)) {
+        GST_INFO_OBJECT (obj, "Can't move");
+        goto error;
+      }
+
       offset = position - _START (obj);
 
       for (tmp = mv_ctx->moving_trackelements; tmp; tmp = tmp->next) {
         trackelement = GES_TRACK_ELEMENT (tmp->data);
         new_start = _START (trackelement) + offset;
+
+        if (!timeline_tree_can_move_element (timeline->priv->tree, tmp->data,
+                _PRIORITY (trackelement) / LAYER_HEIGHT, new_start, _DURATION (tmp->data),
+                mv_ctx->moving_trackelements)) {
+          GST_INFO_OBJECT (trackelement, "Can't move");
+          goto error;
+        }
 
         container = add_toplevel_container (mv_ctx, trackelement);
         /* Make sure not to move 2 times the same Clip */
@@ -2089,6 +2126,7 @@ ges_timeline_move_object_simple (GESTimeline * timeline,
   guint64 *snap_end, *snap_st, *cur, position_offset, off1, off2, top_end;
   GESTrackElement *track_element;
   GESContainer *toplevel;
+  MoveContext *mv_ctx = &timeline->priv->movecontext;
 
   /* We only work with GESSource-s and we check that we are not already moving
    * the specified element ourself */
@@ -2140,6 +2178,13 @@ ges_timeline_move_object_simple (GESTimeline * timeline,
   } else
     ges_timeline_emit_snappig (timeline, track_element, NULL);
   timeline->priv->needs_rollback = FALSE;
+
+  if (!timeline_tree_can_move_element (timeline->priv->tree, element,
+          _PRIORITY (element) / LAYER_HEIGHT, position, _DURATION (element),
+          mv_ctx->moving_trackelements)) {
+    GST_INFO_OBJECT (track_element, "Can't move");
+    return FALSE;
+  }
 
   _set_start0 (GES_TIMELINE_ELEMENT (track_element), position);
 
@@ -2824,13 +2869,21 @@ timeline_add_element (GESTimeline * timeline, GESTimelineElement * element)
   g_hash_table_insert (timeline->priv->all_elements,
       ges_timeline_element_get_name (element), gst_object_ref (element));
 
+  timeline_tree_track_element (timeline->priv->tree, element);
+
   return TRUE;
 }
 
 gboolean
 timeline_remove_element (GESTimeline * timeline, GESTimelineElement * element)
 {
-  return g_hash_table_remove (timeline->priv->all_elements, element->name);
+  if (g_hash_table_remove (timeline->priv->all_elements, element->name)) {
+    timeline_tree_stop_tracking_element (timeline->priv->tree, element);
+
+    return TRUE;
+  }
+
+  return FALSE;
 }
 
 void
@@ -2841,6 +2894,12 @@ timeline_fill_gaps (GESTimeline * timeline)
   for (tmp = timeline->tracks; tmp; tmp = tmp->next) {
     track_resort_and_fill_gaps (tmp->data);
   }
+}
+
+GNode *
+timeline_get_tree (GESTimeline * timeline)
+{
+  return timeline->priv->tree;
 }
 
 /**** API *****/

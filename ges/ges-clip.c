@@ -637,11 +637,28 @@ _edit (GESContainer * container, GList * layers,
   GList *tmp;
   gboolean ret = TRUE;
   GESLayer *layer;
+  GESTimeline *timeline = GES_TIMELINE_ELEMENT_TIMELINE (container);
+  GESTimelineElement *element = GES_TIMELINE_ELEMENT (container);
 
   if (!G_UNLIKELY (GES_CONTAINER_CHILDREN (container))) {
     GST_WARNING_OBJECT (container, "Trying to edit, but not containing"
         "any TrackElement yet.");
     return FALSE;
+  }
+
+  if (!timeline) {
+    GST_WARNING_OBJECT (container, "Trying to edit, but not in any"
+        "timeline.");
+    return FALSE;
+  }
+
+  if (new_layer_priority != -1) {
+    if (!timeline_tree_can_move_element (timeline_get_tree (timeline),
+            element, new_layer_priority, element->start, element->duration,
+            NULL)) {
+      GST_INFO_OBJECT (element, "Can't move to layer %d", new_layer_priority);
+      return FALSE;
+    }
   }
 
   for (tmp = GES_CONTAINER_CHILDREN (container); tmp; tmp = g_list_next (tmp)) {

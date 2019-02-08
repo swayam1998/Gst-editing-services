@@ -666,6 +666,17 @@ ges_layer_add_clip (GESLayer * layer, GESClip * clip)
   /* emit 'clip-added' */
   g_signal_emit (layer, ges_layer_signals[OBJECT_ADDED], 0, clip);
 
+  if (layer->timeline
+      && !timeline_tree_can_move_element (timeline_get_tree (layer->timeline),
+          GES_TIMELINE_ELEMENT (clip),
+          ges_clip_get_layer_priority (clip),
+          GES_TIMELINE_ELEMENT_START (clip),
+          GES_TIMELINE_ELEMENT_DURATION (clip), NULL)) {
+    GST_INFO_OBJECT (layer, "Clip %" GES_FORMAT, GES_ARGS (clip));
+    ges_layer_remove_clip_internal (layer, clip, TRUE);
+    return FALSE;
+  }
+
   return TRUE;
 }
 

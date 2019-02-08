@@ -267,6 +267,12 @@ _trim (GESTimelineElement * group, GstClockTime start)
     return FALSE;
   }
 
+  if (!timeline_tree_can_move_element (timeline_get_tree (timeline), group,
+          _PRIORITY (group), start, _DURATION (group), NULL)) {
+    GST_INFO_OBJECT (group, "Can't move");
+    return FALSE;
+  }
+
   container->children_control_mode = GES_CHILDREN_IGNORE_NOTIFIES;
   for (tmp = GES_CONTAINER_CHILDREN (group); tmp; tmp = tmp->next) {
     GESTimelineElement *child = tmp->data;

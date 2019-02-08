@@ -30,6 +30,7 @@
 
 #include "ges-asset.h"
 #include "ges-base-xml-formatter.h"
+#include "ges-timeline-tree.h"
 
 G_BEGIN_DECLS
 
@@ -50,7 +51,9 @@ GST_DEBUG_CATEGORY_EXTERN (_ges_debug);
 #define _DURATION(obj) GES_TIMELINE_ELEMENT_DURATION (obj)
 #define _MAXDURATION(obj) GES_TIMELINE_ELEMENT_MAX_DURATION (obj)
 #define _PRIORITY(obj) GES_TIMELINE_ELEMENT_PRIORITY (obj)
+#ifndef _END
 #define _END(obj) (_START (obj) + _DURATION (obj))
+#endif
 #define _set_start0 ges_timeline_element_set_start
 #define _set_inpoint0 ges_timeline_element_set_inpoint
 #define _set_duration0 ges_timeline_element_set_duration
@@ -60,13 +63,16 @@ GST_DEBUG_CATEGORY_EXTERN (_ges_debug);
     "s<%p>" \
     " [ %" GST_TIME_FORMAT \
     " (%" GST_TIME_FORMAT \
-    ") - %" GST_TIME_FORMAT "]"
+    ") - %" GST_TIME_FORMAT "] "
 
 #define GES_TIMELINE_ELEMENT_ARGS(element) \
     GES_TIMELINE_ELEMENT_NAME(element), element, \
     GST_TIME_ARGS(GES_TIMELINE_ELEMENT_START(element)), \
     GST_TIME_ARGS(GES_TIMELINE_ELEMENT_INPOINT(element)), \
     GST_TIME_ARGS(GES_TIMELINE_ELEMENT_DURATION(element))
+
+#define GES_FORMAT GES_TIMELINE_ELEMENT_FORMAT
+#define GES_ARGS GES_TIMELINE_ELEMENT_ARGS
 
 G_GNUC_INTERNAL gboolean
 timeline_ripple_object         (GESTimeline *timeline, GESTrackElement *obj,
@@ -120,6 +126,10 @@ G_GNUC_INTERNAL
 gboolean
 timeline_remove_element       (GESTimeline *timeline,
                                GESTimelineElement *element);
+
+G_GNUC_INTERNAL
+GNode *
+timeline_get_tree           (GESTimeline *timeline);
 
 G_GNUC_INTERNAL
 void
