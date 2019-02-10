@@ -1108,6 +1108,17 @@ ges_clip_move_to_layer (GESClip * clip, GESLayer * layer)
   g_return_val_if_fail (GES_IS_CLIP (clip), FALSE);
   g_return_val_if_fail (GES_IS_LAYER (layer), FALSE);
 
+  if (layer->timeline
+      && !timeline_tree_can_move_element (timeline_get_tree (layer->timeline),
+          GES_TIMELINE_ELEMENT (clip),
+          ges_layer_get_priority (layer),
+          GES_TIMELINE_ELEMENT_START (clip),
+          GES_TIMELINE_ELEMENT_DURATION (clip), NULL)) {
+    GST_INFO_OBJECT (layer, "Clip %" GES_FORMAT " can't move to layer %d",
+        GES_ARGS (clip), ges_layer_get_priority (layer));
+    return FALSE;
+  }
+
   current_layer = clip->priv->layer;
 
   if (current_layer == NULL) {

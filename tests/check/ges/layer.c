@@ -771,7 +771,7 @@ GST_START_TEST (test_multi_layer_automatic_transition)
 
   GST_DEBUG
       ("Moving src to second layer, should remove first transition on first layer");
-  ges_clip_move_to_layer (GES_CLIP (src), layer1);
+  fail_if (ges_clip_move_to_layer (GES_CLIP (src), layer1));
 
   /*        500___________src1_________1500
    *                         1000___________src3_________2000   Layer
@@ -792,31 +792,8 @@ GST_START_TEST (test_multi_layer_automatic_transition)
 
   GST_DEBUG ("Checking transitions on first layer");
   current = objects = ges_layer_get_clips (layer);
-  assert_equals_int (g_list_length (objects), 4);
-  fail_unless (current->data == src1);
+  assert_equals_int (g_list_length (objects), 7);
 
-  current = current->next;
-  transition = current->data;
-  assert_is_type (transition, GES_TYPE_TRANSITION_CLIP);
-  assert_equals_uint64 (_START (transition), 1000);
-  assert_equals_uint64 (_DURATION (transition), 500);
-
-  current = current->next;
-  transition = current->data;
-  assert_is_type (transition, GES_TYPE_TRANSITION_CLIP);
-  assert_equals_uint64 (_START (transition), 1000);
-  assert_equals_uint64 (_DURATION (transition), 500);
-
-  current = current->next;
-  fail_unless (current->data == src3);
-  g_list_free_full (objects, gst_object_unref);
-  ASSERT_OBJECT_REFCOUNT (transition, "layer + timeline", 2);
-
-  GST_DEBUG ("Checking second layer");
-  current = objects = ges_layer_get_clips (layer1);
-  assert_equals_int (g_list_length (objects), 2);
-  assert_is_type (current->data, GES_TYPE_TEST_CLIP);
-  assert_is_type (current->next->data, GES_TYPE_TEST_CLIP);
   g_list_free_full (objects, gst_object_unref);
   ASSERT_OBJECT_REFCOUNT (transition, "layer + timeline", 2);
 
