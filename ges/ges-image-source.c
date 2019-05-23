@@ -170,6 +170,7 @@ ges_image_source_class_init (GESImageSourceClass * klass)
           NULL, G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
 
   GES_TIMELINE_ELEMENT_CLASS (klass)->set_inpoint = NULL;
+  GES_TIMELINE_ELEMENT_CLASS (klass)->set_inpoint_full = NULL;
   source_class->create_source = ges_image_source_create_source;
 }
 

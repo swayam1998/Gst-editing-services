@@ -52,11 +52,14 @@ python module to use with GES 0.10"
 
 class TimelineElement(GES.TimelineElement):
     def __repr__(self):
-        return "%s [%s (%s) %s]" % (
+        return "%s [%s(%s) (%s(%d)) %s(%d)]" % (
             self.props.name,
             Gst.TIME_ARGS(self.props.start),
+            self.props.fstart if self.props.fstart != GES.FRAME_NONE else -1,
             Gst.TIME_ARGS(self.props.in_point),
+            self.props.fin_point if self.props.fin_point != GES.FRAME_NONE else -1,
             Gst.TIME_ARGS(self.props.duration),
+            self.props.fduration if self.props.fduration != GES.FRAME_NONE else -1,
         )
 
     def set_child_property(self, prop_name, prop_value):

@@ -129,6 +129,17 @@ G_DEFINE_TYPE_WITH_CODE (GESVideoUriSource, ges_video_uri_source,
 
 /* GObject VMethods */
 
+static gboolean
+_get_natural_framerate (GESTimelineElement * self, gint * framerate_n,
+    gint * framerate_d)
+{
+  if (self->parent)
+    return ges_timeline_element_get_natural_framerate (self->parent,
+        framerate_n, framerate_d);
+
+  return FALSE;
+}
+
 static void
 ges_video_uri_source_get_property (GObject * object, guint property_id,
     GValue * value, GParamSpec * pspec)
@@ -178,6 +189,7 @@ static void
 ges_video_uri_source_class_init (GESVideoUriSourceClass * klass)
 {
   GObjectClass *object_class = G_OBJECT_CLASS (klass);
+  GESTimelineElementClass *element_class = GES_TIMELINE_ELEMENT_CLASS (klass);
   GESVideoSourceClass *source_class = GES_VIDEO_SOURCE_CLASS (klass);
 
   object_class->get_property = ges_video_uri_source_get_property;
@@ -192,6 +204,8 @@ ges_video_uri_source_class_init (GESVideoUriSourceClass * klass)
   g_object_class_install_property (object_class, PROP_URI,
       g_param_spec_string ("uri", "URI", "uri of the resource",
           NULL, G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
+
+  element_class->get_natural_framerate = _get_natural_framerate;
 
   source_class->create_source = ges_video_uri_source_create_source;
 }

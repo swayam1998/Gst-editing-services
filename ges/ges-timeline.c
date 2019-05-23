@@ -94,6 +94,10 @@ struct _GESTimelinePrivate
   /* The duration of the timeline */
   gint64 duration;
 
+  gint framerate_n;
+  gint framerate_d;
+  GstVideoTimeCodeFlags timecodes_flags;
+
   /* The auto-transition of the timeline */
   gboolean auto_transition;
 
@@ -155,7 +159,7 @@ enum
   PROP_DURATION,
   PROP_AUTO_TRANSITION,
   PROP_SNAPPING_DISTANCE,
-  PROP_UPDATE,
+  PROP_FRAMERATE,
   PROP_LAST
 };
 
@@ -247,6 +251,10 @@ ges_timeline_get_property (GObject * object, guint property_id,
     case PROP_SNAPPING_DISTANCE:
       g_value_set_uint64 (value, timeline->priv->snapping_distance);
       break;
+    case PROP_FRAMERATE:
+      gst_value_set_fraction (value,
+          timeline->priv->framerate_n, timeline->priv->framerate_d);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
   }
@@ -264,6 +272,12 @@ ges_timeline_set_property (GObject * object, guint property_id,
       break;
     case PROP_SNAPPING_DISTANCE:
       timeline->priv->snapping_distance = g_value_get_uint64 (value);
+      break;
+    case PROP_FRAMERATE:
+      ges_timeline_set_timecodes_config (timeline,
+          gst_value_get_fraction_numerator (value),
+          gst_value_get_fraction_denominator (value),
+          timeline->priv->timecodes_flags);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -444,6 +458,17 @@ ges_timeline_class_init (GESTimelineClass * klass)
       properties[PROP_SNAPPING_DISTANCE]);
 
   /**
+   * GESTimeline:framerate:
+   *
+   * See #ges_timeline_set_timecodes_config
+   */
+  properties[PROP_FRAMERATE] =
+      gst_param_spec_fraction ("framerate", "Framerate",
+      "The overal framerate to use inside the timeline.",
+      0, 1, G_MAXINT, 1, 30, 1, G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
+  g_object_class_install_property (object_class, PROP_FRAMERATE,
+      properties[PROP_FRAMERATE]);
+  /**
    * GESTimeline::track-added:
    * @timeline: the #GESTimeline
    * @track: the #GESTrack that was added to the timeline
@@ -589,6 +614,8 @@ ges_timeline_init (GESTimeline * self)
   priv->snapping_distance = 0;
   priv->expected_async_done = 0;
   priv->expected_commited = 0;
+  priv->framerate_n = 0;
+  priv->framerate_d = -1;
 
   self->priv->last_snap_ts = GST_CLOCK_TIME_NONE;
 
@@ -856,16 +883,6 @@ ges_timeline_emit_snapping (GESTimeline * timeline, GESTimelineElement * elem1,
 }
 
 gboolean
-ges_timeline_trim_object_simple (GESTimeline * timeline,
-    GESTimelineElement * element, guint32 new_layer_priority,
-    GList * layers, GESEdge edge, guint64 position, gboolean snapping)
-{
-
-  return timeline_trim_object (timeline, element, new_layer_priority, layers,
-      edge, position);
-}
-
-gboolean
 timeline_ripple_object (GESTimeline * timeline, GESTimelineElement * obj,
     gint new_layer_priority, GList * layers, GESEdge edge, guint64 position)
 {
@@ -931,8 +948,8 @@ timeline_slide_object (GESTimeline * timeline, GESTrackElement * obj,
   return FALSE;
 }
 
-static gboolean
-_trim_transition (GESTimeline * timeline, GESTimelineElement * element,
+gboolean
+timeline_trim_transition (GESTimeline * timeline, GESTimelineElement * element,
     GESEdge edge, GstClockTime position)
 {
   GList *tmp;
@@ -972,23 +989,17 @@ fail:
   return FALSE;
 }
 
-
 gboolean
 timeline_trim_object (GESTimeline * timeline, GESTimelineElement * object,
     guint32 new_layer_priority, GList * layers, GESEdge edge, guint64 position)
 {
-  if ((GES_IS_TRANSITION (object) || GES_IS_TRANSITION_CLIP (object)) &&
-      !ELEMENT_FLAG_IS_SET (object, GES_TIMELINE_ELEMENT_SET_SIMPLE)) {
-    return _trim_transition (timeline, object, edge, position);
-  }
-
   return timeline_tree_trim (timeline->priv->tree,
       GES_TIMELINE_ELEMENT (object), new_layer_priority > 0 ? (gint64)
       ges_timeline_element_get_layer_priority (GES_TIMELINE_ELEMENT (object)) -
       new_layer_priority : 0, edge == GES_EDGE_END ? GST_CLOCK_DIFF (position,
           _START (object) + _DURATION (object)) : GST_CLOCK_DIFF (position,
           GES_TIMELINE_ELEMENT_START (object)), edge,
-      timeline->priv->snapping_distance);
+      timeline->priv->snapping_distance, GES_FRAME_NONE);
 }
 
 gboolean
@@ -1013,9 +1024,10 @@ timeline_move_object (GESTimeline * timeline, GESTimelineElement * object,
       GST_CLOCK_DIFF (position, GES_TIMELINE_ELEMENT_START (object));
 
   ret = timeline_tree_move (timeline->priv->tree,
-      GES_TIMELINE_ELEMENT (object), new_layer_priority < 0 ? 0 : (gint64)
+      object, new_layer_priority < 0 ? 0 : (gint64)
       ges_timeline_element_get_layer_priority (GES_TIMELINE_ELEMENT (object)) -
-      new_layer_priority, offset, edge, timeline->priv->snapping_distance);
+      new_layer_priority, offset, edge, timeline->priv->snapping_distance,
+      GES_FRAME_NONE);
 
   return ret;
 }
@@ -2594,5 +2606,92 @@ ges_timeline_move_layer (GESTimeline * timeline, GESLayer * layer,
 
   _resync_layers (timeline);
 
+  return TRUE;
+}
+
+/**
+ * ges_timeline_get_timecodes_config:
+ * @timeline: A #GESTimeline to get currently set framerate
+ * @framerate_n: (out): The framerate numerator
+ * @framerate_d: (out): The framerate denominator
+ * @timecodes_flags:(out): The #GstVideoTimecodeFlags to use when using the frames based API.
+ *
+ *  DOCUMENT ME!!
+ *
+ * Returns: %TRUE if a timecodes config was set, %FALSE otherwise
+ */
+gboolean
+ges_timeline_get_timecodes_config (GESTimeline * timeline, gint * framerate_n,
+    gint * framerate_d, GstVideoTimeCodeFlags * timecodes_flags)
+{
+  g_return_val_if_fail (GES_IS_TIMELINE (timeline), FALSE);
+
+  if (framerate_n && framerate_d) {
+    *framerate_n = 0;
+    *framerate_d = -1;
+  }
+
+  if (timecodes_flags)
+    *timecodes_flags = timeline->priv->timecodes_flags;
+
+  if (timeline->priv->framerate_n == 0) {
+    GST_DEBUG_OBJECT (timeline, "Not using any framerate");
+
+    return FALSE;
+  }
+
+  if (framerate_n && framerate_d) {
+    *framerate_n = timeline->priv->framerate_n;
+    *framerate_d = timeline->priv->framerate_d;
+  }
+
+  return TRUE;
+}
+
+/**
+ * ges_timeline_set_timecodes_config:
+ * @timeline: The #GESTimeline to set framerate on
+ * @framerate_n: The framerate numerator value
+ * @framerate_d: The framerate denominator value
+ * @flags: The #GstVideoTimeCodeFlags to use when using the provided framerate.
+ *
+ * The configuration for timecodes in a timeline.
+ *
+ * The framerate basically sets a "scale" for the timeline, meaning that
+ * all values of contained #GESTimelineElement elements are within this
+ * scale.
+ *
+ * NOTE: Setting @framerate_n to 0 means that "framerate based mode" is disabled.
+ *
+ * Return %TRUE if the framerate could be set %FALSE otherwise.
+ */
+gboolean
+ges_timeline_set_timecodes_config (GESTimeline * timeline, gint framerate_n,
+    gint framerate_d, GstVideoTimeCodeFlags timecodes_flags)
+{
+  GNode *node;
+
+  g_return_val_if_fail (framerate_n >= 0, FALSE);
+  g_return_val_if_fail (framerate_d != 0, FALSE);
+  g_return_val_if_fail (GES_IS_TIMELINE (timeline), FALSE);
+
+  timeline->priv->framerate_n = framerate_n;
+  timeline->priv->framerate_d = framerate_d;
+  timeline->priv->timecodes_flags = timecodes_flags;
+
+  for (node = timeline->priv->tree->children; node; node = node->next) {
+    GESTimelineElement *toplevel = GES_TIMELINE_ELEMENT (node->data);
+    if (!ges_timeline_element_reset_framerate_on_edge (toplevel, GES_EDGE_NONE,
+            FALSE)) {
+      GST_ERROR_OBJECT (timeline,
+          "Could not reset toplevel %" GES_TIMELINE_ELEMENT_FORMAT
+          " timing value!", GES_TIMELINE_ELEMENT_ARGS (toplevel));
+      GST_FIXME_OBJECT (timeline, "ADD A WAY TO REVERT!");
+
+      return FALSE;
+    }
+  }
+
+  g_object_notify_by_pspec (G_OBJECT (timeline), properties[PROP_FRAMERATE]);
   return TRUE;
 }

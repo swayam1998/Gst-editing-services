@@ -31,6 +31,7 @@
 #endif
 
 #include "ges-utils.h"
+#include "ges-time-code.h"
 #include "ges-timeline-element.h"
 #include "ges-extractable.h"
 #include "ges-meta-container.h"
@@ -61,9 +62,13 @@ enum
   PROP_PARENT,
   PROP_TIMELINE,
   PROP_START,
+  PROP_FSTART,
   PROP_INPOINT,
+  PROP_FINPOINT,
   PROP_DURATION,
+  PROP_FDURATION,
   PROP_MAX_DURATION,
+  PROP_FMAX_DURATION,
   PROP_PRIORITY,
   PROP_NAME,
   PROP_SERIALIZE,
@@ -95,10 +100,20 @@ struct _GESTimelineElementPrivate
    * {GParamaSpec ---> child}*/
   GHashTable *children_props;
 
+  GESTimeCode timecodes[4];
+
   GESTimelineElement *copied_from;
 
   GESTimelineElementFlags flags;
 };
+
+typedef enum
+{
+  START_TC,
+  DURATION_TC,
+  INPOINT_TC,
+  MAX_DURATION_TC
+} TimeCodeIndex;
 
 typedef struct
 {
@@ -106,6 +121,11 @@ typedef struct
   GParamSpec *arg;
   GESTimelineElement *self;
 } EmitDeepNotifyInIdleData;
+
+typedef gboolean (*SetTimestampFunc) (GESTimelineElement * self,
+    GstClockTime ts, GESFrameNumber frame);
+typedef gboolean (*SetFramesFunc) (GESTimelineElement * self,
+    GESFrameNumber frame);
 
 G_DEFINE_ABSTRACT_TYPE_WITH_CODE (GESTimelineElement, ges_timeline_element,
     G_TYPE_INITIALLY_UNOWNED, G_ADD_PRIVATE (GESTimelineElement)
@@ -206,14 +226,26 @@ _get_property (GObject * object, guint property_id,
     case PROP_START:
       g_value_set_uint64 (value, self->start);
       break;
+    case PROP_FSTART:
+      g_value_set_int64 (value, ges_timeline_element_get_fstart (self));
+      break;
     case PROP_INPOINT:
       g_value_set_uint64 (value, self->inpoint);
+      break;
+    case PROP_FINPOINT:
+      g_value_set_int64 (value, ges_timeline_element_get_finpoint (self));
       break;
     case PROP_DURATION:
       g_value_set_uint64 (value, self->duration);
       break;
+    case PROP_FDURATION:
+      g_value_set_int64 (value, ges_timeline_element_get_fduration (self));
+      break;
     case PROP_MAX_DURATION:
       g_value_set_uint64 (value, self->maxduration);
+      break;
+    case PROP_FMAX_DURATION:
+      g_value_set_int64 (value, ges_timeline_element_get_fmax_duration (self));
       break;
     case PROP_PRIORITY:
       g_value_set_uint (value, self->priority);
@@ -245,17 +277,29 @@ _set_property (GObject * object, guint property_id,
     case PROP_START:
       ges_timeline_element_set_start (self, g_value_get_uint64 (value));
       break;
+    case PROP_FSTART:
+      ges_timeline_element_set_fstart (self, g_value_get_int64 (value));
+      break;
     case PROP_INPOINT:
       ges_timeline_element_set_inpoint (self, g_value_get_uint64 (value));
       break;
+    case PROP_FINPOINT:
+      ges_timeline_element_set_finpoint (self, g_value_get_int64 (value));
+      break;
     case PROP_DURATION:
       ges_timeline_element_set_duration (self, g_value_get_uint64 (value));
+      break;
+    case PROP_FDURATION:
+      ges_timeline_element_set_fduration (self, g_value_get_int64 (value));
       break;
     case PROP_PRIORITY:
       ges_timeline_element_set_priority (self, g_value_get_uint (value));
       break;
     case PROP_MAX_DURATION:
       ges_timeline_element_set_max_duration (self, g_value_get_uint64 (value));
+      break;
+    case PROP_FMAX_DURATION:
+      ges_timeline_element_set_fmax_duration (self, g_value_get_int64 (value));
       break;
     case PROP_NAME:
       ges_timeline_element_set_name (self, g_value_get_string (value));
@@ -304,17 +348,132 @@ _child_prop_handler_free (ChildPropHandler * handler)
   g_slice_free (ChildPropHandler, handler);
 }
 
+static gboolean
+_get_natural_framerate (GESTimelineElement * self, gint * framerate_n,
+    gint * framerate_d)
+{
+  GST_INFO_OBJECT (self, "No natural framerate");
+
+  return FALSE;
+}
+
+static gboolean
+ges_timeline_element_get_timecodes_config (GESTimelineElement * self,
+    TimeCodeIndex timecode_index, gint * framerate_n, gint * framerate_d,
+    GstVideoTimeCodeFlags * flags)
+{
+  if (!self->timeline)
+    return FALSE;
+
+  if (!ges_timeline_get_timecodes_config (self->timeline, framerate_n,
+          framerate_d, flags)) {
+    GST_DEBUG_OBJECT (self, "No framerate on timeline.");
+    return FALSE;
+  }
+
+  if (timecode_index == INPOINT_TC || timecode_index == MAX_DURATION_TC) {
+    if (ges_timeline_element_get_natural_framerate (self, framerate_n,
+            framerate_d)) {
+      GST_INFO_OBJECT (self, "Using natural framerate %d/%d for %s",
+          *framerate_n, *framerate_d,
+          timecode_index == INPOINT_TC ? "inpoint" : "fmax-duration");
+    } else {
+      ges_timeline_get_timecodes_config (self->timeline, framerate_n,
+          framerate_d, flags);
+    }
+  }
+
+  return TRUE;
+}
+
+static gboolean
+ges_timeline_element_get_frames_ts (GESTimelineElement * self, gint64 frames,
+    gint64 * time, gboolean use_natural)
+{
+  gint framerate_n, framerate_d;
+  GstVideoTimeCodeFlags flags;
+
+  if (!ges_timeline_element_get_timecodes_config (self,
+          use_natural ? INPOINT_TC : DURATION_TC, &framerate_n, &framerate_d,
+          &flags)) {
+
+    return FALSE;
+  }
+
+  *time = ges_frames_diff_to_ns (frames, framerate_n, framerate_d, flags);
+  return TRUE;
+}
+
+static gboolean
+_reset_framerate (GESTimelineElement * self, guint timecode_index,
+    gboolean force, SetFramesFunc set_frames)
+{
+  GESTimeCode *tc = &self->priv->timecodes[timecode_index];
+
+  if (GES_FRAME_IS_VALID (tc->n_frames) || force) {
+    GESFrameNumber frame;
+    gint framerate_n, framerate_d;
+    GstVideoTimeCodeFlags flags;
+
+    if (tc->is_used || force) {
+      GstClockTime ts = G_STRUCT_MEMBER (GstClockTime, self, tc->offset);
+
+      ges_timeline_element_get_timecodes_config (self, timecode_index,
+          &framerate_n, &framerate_d, &flags);
+
+      frame =
+          ges_timestamp_get_frame (ts, framerate_n, framerate_d, flags, FALSE);
+    } else {
+      frame = tc->n_frames;
+    }
+
+    if (!set_frames (self, frame)) {
+      GST_ERROR_OBJECT (self, "Could not set %s to " FRAMES_FORMAT,
+          tc->propname, FRAMES_ARGS (frame));
+
+      return FALSE;
+    }
+  } else {
+    GST_DEBUG_OBJECT (self, "Not setting %s", tc->propname);
+  }
+
+  return TRUE;
+}
+
 static void
 ges_timeline_element_init (GESTimelineElement * self)
 {
+  gint i;
+  GESTimelineElementPrivate *priv;
+
   self->priv = ges_timeline_element_get_instance_private (self);
 
   self->priv->serialize = TRUE;
+  priv = self->priv;
 
-  self->priv->children_props =
+  priv->children_props =
       g_hash_table_new_full ((GHashFunc) ges_pspec_hash, ges_pspec_equal,
       (GDestroyNotify) g_param_spec_unref,
       (GDestroyNotify) _child_prop_handler_free);
+
+  for (i = 0; i < 4; i++)
+    priv->timecodes[i].n_frames = GES_FRAME_NONE;
+
+  priv->timecodes[START_TC].propname = "fstart";
+  priv->timecodes[START_TC].offset =
+      G_STRUCT_OFFSET (GESTimelineElement, start);
+
+  priv->timecodes[DURATION_TC].propname = "fduration";
+  priv->timecodes[DURATION_TC].offset =
+      G_STRUCT_OFFSET (GESTimelineElement, duration);
+
+  priv->timecodes[INPOINT_TC].propname = "finpoint";
+  priv->timecodes[INPOINT_TC].offset =
+      G_STRUCT_OFFSET (GESTimelineElement, inpoint);
+
+  priv->timecodes[MAX_DURATION_TC].propname = "fmax-duration";
+  priv->timecodes[MAX_DURATION_TC].offset =
+      G_STRUCT_OFFSET (GESTimelineElement, maxduration);
 }
 
 static void
@@ -350,7 +509,20 @@ ges_timeline_element_class_init (GESTimelineElementClass * klass)
    * The position of the object in the timeline (in nanoseconds).
    */
   properties[PROP_START] = g_param_spec_uint64 ("start", "Start",
-      "The position in the container", 0, G_MAXUINT64, 0, G_PARAM_READWRITE);
+      "The position in the timeline", 0, G_MAXUINT64, 0, G_PARAM_READWRITE);
+
+  /**
+   * GESTimelineElement:fstart:
+   *
+   * The position of the object in the timeline, in number of frames using the
+   * #GESTimeline:framerate as a scale.
+   *
+   * Since: 1.18
+   */
+  properties[PROP_FSTART] = g_param_spec_int64 ("fstart", "Start in frames",
+      "The position in the timeline, in number of frames using "
+      " #GESTimeline:framerate as scale", 0, GES_FRAME_NONE, 0,
+      G_PARAM_READWRITE);
 
   /**
    * GESTimelineElement:in-point:
@@ -366,6 +538,21 @@ ges_timeline_element_class_init (GESTimelineElementClass * klass)
       G_MAXUINT64, 0, G_PARAM_READWRITE);
 
   /**
+   * GESTimelineElement:fin-point:
+   *
+   * The in-point at which this #GESTimelineElement will start outputting data
+   * from its source contents in number of frames. The scale is the source
+   * framerate. For example in a #GESUriClip with a video stream, the scale
+   * is the framerate of the video source.
+   * Use #ges_timeline_element_get_natural_framerate to retrieve the framerate.
+   *
+   * Since: 1.18
+   */
+  properties[PROP_FINPOINT] =
+      g_param_spec_int64 ("fin-point", "In-pointo in frames",
+      "The in-point in frames", 0, GES_FRAME_NONE, 0, G_PARAM_READWRITE);
+
+  /**
    * GESTimelineElement:duration:
    *
    * The duration (in nanoseconds) which will be used in the container
@@ -373,6 +560,19 @@ ges_timeline_element_class_init (GESTimelineElementClass * klass)
   properties[PROP_DURATION] =
       g_param_spec_uint64 ("duration", "Duration", "The duration to use", 0,
       G_MAXUINT64, GST_CLOCK_TIME_NONE, G_PARAM_READWRITE);
+
+  /**
+   * GESTimelineElement:fduration:
+   *
+   * The duration of the object in the timeline in number of frames using the
+   * #GESTimeline:framerate as a scale.
+   *
+   * Since: 1.18
+   */
+  properties[PROP_FDURATION] =
+      g_param_spec_int64 ("fduration", "Duration in frames",
+      "The duration in frames", 0, GES_FRAME_NONE, GES_FRAME_NONE,
+      G_PARAM_READWRITE);
 
   /**
    * GESTimelineElement:max-duration:
@@ -383,6 +583,19 @@ ges_timeline_element_class_init (GESTimelineElementClass * klass)
       g_param_spec_uint64 ("max-duration", "Maximum duration",
       "The maximum duration of the object", 0, G_MAXUINT64, GST_CLOCK_TIME_NONE,
       G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
+
+  /**
+   * GESTimelineElement:fmax-duration:
+   *
+   * The maximum duration of the object in the timeline in number of frames using the
+   * #GESTimeline:framerate as a scale.
+   *
+   * Since: 1.18
+   */
+  properties[PROP_FMAX_DURATION] =
+      g_param_spec_int64 ("fmax-duration", "Maximum duration in frames",
+      "The maximum duration in frames", 0, GES_FRAME_NONE, GES_FRAME_NONE,
+      G_PARAM_READWRITE);
 
   /**
    * GESTimelineElement:priority:
@@ -434,10 +647,18 @@ ges_timeline_element_class_init (GESTimelineElementClass * klass)
   object_class->finalize = ges_timeline_element_finalize;
 
   klass->set_parent = NULL;
+
   klass->set_start = NULL;
+  klass->set_start_full = NULL;
+
   klass->set_inpoint = NULL;
+  klass->set_inpoint_full = NULL;
+
   klass->set_duration = NULL;
+  klass->set_duration_full = NULL;
+
   klass->set_max_duration = NULL;
+  klass->set_max_duration_full = NULL;
   klass->set_priority = NULL;
 
   klass->ripple = NULL;
@@ -449,6 +670,7 @@ ges_timeline_element_class_init (GESTimelineElementClass * klass)
   klass->list_children_properties = default_list_children_properties;
   klass->lookup_child = _lookup_child;
   klass->set_child_property = _set_child_property;
+  klass->get_natural_framerate = _get_natural_framerate;
 }
 
 static void
@@ -524,6 +746,103 @@ _set_name (GESTimelineElement * self, const gchar * wanted_name)
 /*********************************************
  *       Internal and private helpers        *
  *********************************************/
+
+static gboolean
+ges_timeline_element_set_max_duration_internal (GESTimelineElement * self,
+    GstClockTime max_duration, GESFrameNumber fmax_duration)
+{
+  gint res;
+  GESTimelineElementClass *klass;
+
+  g_return_val_if_fail (GES_IS_TIMELINE_ELEMENT (self), FALSE);
+
+  klass = GES_TIMELINE_ELEMENT_GET_CLASS (self);
+
+  GST_DEBUG_OBJECT (self, "current max_duration: %" GST_TIME_FORMAT
+      " new max_duration: %" GST_TIME_FORMAT,
+      GST_TIME_ARGS (GES_TIMELINE_ELEMENT_MAX_DURATION (self)),
+      GST_TIME_ARGS (max_duration));
+
+  if (klass->set_max_duration_full)
+    res = klass->set_max_duration_full (self, max_duration, fmax_duration);
+  else if (klass->set_max_duration)
+    res = klass->set_max_duration (self, max_duration);
+  else
+    res = TRUE;
+
+  if (res == TRUE) {
+    self->maxduration = max_duration;
+    g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_MAX_DURATION]);
+  }
+
+  return ! !res;
+}
+
+static gboolean
+ges_timeline_element_has_a_frame_value (GESTimelineElement * self)
+{
+  gint i;
+
+  for (i = 0; i < 4; i++) {
+    if (GES_FRAME_IS_VALID (self->priv->timecodes[i].n_frames)) {
+
+      return TRUE;
+    }
+  }
+  GST_DEBUG_OBJECT (self, "NO");
+
+  return FALSE;
+}
+
+gboolean
+ges_timeline_element_reset_framerate_on_edge (GESTimelineElement * self,
+    GESEdge edge, gboolean force)
+{
+  gboolean res = FALSE;
+  g_return_val_if_fail (GES_IS_TIMELINE_ELEMENT (self), FALSE);
+
+  if (edge == GES_EDGE_START || edge == GES_EDGE_NONE) {
+    if (!_reset_framerate (self, START_TC, force,
+            ges_timeline_element_set_fstart)) {
+      GST_ERROR ("%" GES_FORMAT " could not set start in frame.",
+          GES_ARGS (self));
+      goto out;
+    }
+    if (!_reset_framerate (self, INPOINT_TC, force,
+            ges_timeline_element_set_finpoint)) {
+      GST_ERROR ("%" GES_FORMAT " could not set inpoint in frame.",
+          GES_ARGS (self));
+
+      goto out;
+    }
+  }
+
+  if (edge == GES_EDGE_END || edge == GES_EDGE_NONE) {
+    if (!_reset_framerate (self, DURATION_TC,
+            force, ges_timeline_element_set_fduration)) {
+      GST_ERROR ("%" GES_FORMAT " could not set duration in frame.",
+          GES_ARGS (self));
+      goto out;
+    }
+
+    if (GST_CLOCK_TIME_IS_VALID (self->maxduration)
+        || GES_FRAME_IS_VALID (_FMAXDURATION (self))) {
+      if (!_reset_framerate (self, MAX_DURATION_TC, force,
+              ges_timeline_element_set_fmax_duration)) {
+        GST_ERROR ("%" GES_FORMAT " could not set max-duration in frame.",
+            GES_ARGS (self));
+        goto out;
+      }
+    }
+  }
+  GST_DEBUG ("framerate reset: %" GES_FORMAT, GES_ARGS (self));
+  res = TRUE;
+
+out:
+
+  return res;
+}
+
 gdouble
 ges_timeline_element_get_media_duration_factor (GESTimelineElement * self)
 {
@@ -586,7 +905,6 @@ ges_timeline_element_set_flags (GESTimelineElement * self,
     GESTimelineElementFlags flags)
 {
   self->priv->flags = flags;
-
 }
 
 /*********************************************
@@ -683,10 +1001,14 @@ gboolean
 ges_timeline_element_set_timeline (GESTimelineElement * self,
     GESTimeline * timeline)
 {
+  gboolean set_framerate = FALSE;
+  gint framerate_n = 0, framerate_d = 0;
+
   g_return_val_if_fail (GES_IS_TIMELINE_ELEMENT (self), FALSE);
   g_return_val_if_fail (timeline == NULL || GES_IS_TIMELINE (timeline), FALSE);
 
-  GST_DEBUG_OBJECT (self, "set timeline to %" GST_PTR_FORMAT, timeline);
+  GST_DEBUG_OBJECT (self, "set timeline from %" GST_PTR_FORMAT " to %"
+      GST_PTR_FORMAT, self->timeline, timeline);
 
   if (timeline != NULL && G_UNLIKELY (self->timeline != NULL))
     goto had_timeline;
@@ -700,6 +1022,16 @@ ges_timeline_element_set_timeline (GESTimelineElement * self,
       }
     }
   } else {
+    set_framerate =
+        ges_timeline_get_timecodes_config (timeline, &framerate_n, &framerate_d,
+        NULL);
+    if (!set_framerate && ges_timeline_element_has_a_frame_value (self)) {
+      GST_ERROR_OBJECT (self,
+          "Trying to add object with an already set frame count"
+          " but the timeline has no framerate set!");
+      return FALSE;
+    }
+
     if (!timeline_add_element (timeline, self)) {
       GST_INFO_OBJECT (self, "Could not add to timeline %" GST_PTR_FORMAT,
           self);
@@ -708,8 +1040,19 @@ ges_timeline_element_set_timeline (GESTimelineElement * self,
   }
 
   self->timeline = timeline;
-
   g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_TIMELINE]);
+
+  if (set_framerate) {
+    if (!ges_timeline_element_reset_framerate_on_edge (self, GES_EDGE_NONE,
+            FALSE)) {
+      GST_WARNING_OBJECT (self,
+          "Could not set framerate, rolling back on addition");
+      ges_timeline_element_set_timeline (self, NULL);
+      return FALSE;
+    }
+
+  }
+
   return TRUE;
 
   /* ERROR handling */
@@ -745,34 +1088,26 @@ ges_timeline_element_get_timeline (GESTimelineElement * self)
   return result;
 }
 
-/**
- * ges_timeline_element_set_start:
- * @self: a #GESTimelineElement
- * @start: the position in #GstClockTime
- *
- * Set the position of the object in its containing layer.
- *
- * Note that if the snapping-distance property of the timeline containing
- * @self is set, @self will properly snap to the edges around @start.
- *
- * Returns: %TRUE if @start could be set.
- */
-gboolean
-ges_timeline_element_set_start (GESTimelineElement * self, GstClockTime start)
+static gboolean
+ges_timeline_element_set_start_internal (GESTimelineElement * self,
+    GstClockTime start, GESFrameNumber fstart)
 {
+  gint res;
   GESTimelineElementClass *klass;
   GESTimelineElement *toplevel_container, *parent;
 
   g_return_val_if_fail (GES_IS_TIMELINE_ELEMENT (self), FALSE);
 
-  if (self->start == start)
+  if (self->start == start && !GES_FRAME_IS_VALID (fstart))
     return TRUE;
 
   klass = GES_TIMELINE_ELEMENT_GET_CLASS (self);
 
-  GST_DEBUG_OBJECT (self, "current start: %" GST_TIME_FORMAT
-      " new start: %" GST_TIME_FORMAT,
-      GST_TIME_ARGS (GES_TIMELINE_ELEMENT_START (self)), GST_TIME_ARGS (start));
+  GST_DEBUG_OBJECT (self,
+      "current start: %" GST_TIME_FORMAT FRAMES_FORMAT
+      " new start: %" GST_TIME_FORMAT FRAMES_FORMAT,
+      GST_TIME_ARGS (self->start), FRAMES_ARGS (_FSTART (self)),
+      GST_TIME_ARGS (start), FRAMES_ARGS (fstart));
 
   toplevel_container = ges_timeline_element_get_toplevel_parent (self);
   parent = self->parent;
@@ -791,23 +1126,76 @@ ges_timeline_element_set_start (GESTimelineElement * self, GstClockTime start)
   }
 
   gst_object_unref (toplevel_container);
-  if (klass->set_start) {
-    gint res = klass->set_start (self, start);
-    if (res == TRUE) {
-      self->start = start;
-      g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_START]);
-    }
 
-    GST_DEBUG_OBJECT (self, "New start: %" GST_TIME_FORMAT,
-        GST_TIME_ARGS (GES_TIMELINE_ELEMENT_START (self)));
-
-    return ! !res;
+  if (klass->set_start_full)
+    res = klass->set_start_full (self, start, fstart);
+  else if (klass->set_start)
+    res = klass->set_start (self, start);
+  else {
+    GST_WARNING_OBJECT (self, "No set_start virtual method implementation"
+        " on class %s. Can not set start %" GST_TIME_FORMAT,
+        G_OBJECT_CLASS_NAME (klass), GST_TIME_ARGS (start));
+    return FALSE;
   }
 
-  GST_WARNING_OBJECT (self, "No set_start virtual method implementation"
-      " on class %s. Can not set start %" GST_TIME_FORMAT,
-      G_OBJECT_CLASS_NAME (klass), GST_TIME_ARGS (start));
-  return FALSE;
+  if (res == TRUE) {
+    self->start = start;
+    g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_START]);
+  }
+
+  return ! !res;
+}
+
+/**
+ * ges_timeline_element_set_start:
+ * @self: a #GESTimelineElement
+ * @start: the position in #GstClockTime
+ *
+ * Set the position of the object in its containing layer.
+ *
+ * Note that if the snapping-distance property of the timeline containing
+ * @self is set, @self will properly snap to the edges around @start.
+ *
+ * Returns: %TRUE if @start could be set.
+ */
+gboolean
+ges_timeline_element_set_start (GESTimelineElement * self, GstClockTime ts)
+{
+  return ges_timeline_element_set_start_internal (self, ts, GES_FRAME_NONE);
+}
+
+static gboolean
+ges_timeline_element_set_inpoint_internal (GESTimelineElement * self,
+    GstClockTime inpoint, GESFrameNumber finpoint)
+{
+  gint res;
+  GESTimelineElementClass *klass;
+
+  g_return_val_if_fail (GES_IS_TIMELINE_ELEMENT (self), FALSE);
+
+  klass = GES_TIMELINE_ELEMENT_GET_CLASS (self);
+
+  GST_DEBUG_OBJECT (self, "current inpoint: %" GST_TIME_FORMAT
+      " new inpoint: %" GST_TIME_FORMAT,
+      GST_TIME_ARGS (GES_TIMELINE_ELEMENT_INPOINT (self)),
+      GST_TIME_ARGS (inpoint));
+
+  if (klass->set_inpoint_full)
+    res = klass->set_inpoint_full (self, inpoint, finpoint);
+  else if (klass->set_inpoint)
+    res = klass->set_inpoint (self, inpoint);
+  else {
+    GST_DEBUG_OBJECT (self, "No set_inpoint virtual method implementation"
+        " on class %s. Can not set inpoint %" GST_TIME_FORMAT,
+        G_OBJECT_CLASS_NAME (klass), GST_TIME_ARGS (inpoint));
+    return FALSE;
+  }
+
+  if (res == TRUE) {
+    self->inpoint = inpoint;
+    g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_INPOINT]);
+  }
+  return ! !res;
 }
 
 /**
@@ -821,34 +1209,9 @@ ges_timeline_element_set_start (GESTimelineElement * self, GstClockTime start)
  * Returns: %TRUE if @inpoint could be set.
  */
 gboolean
-ges_timeline_element_set_inpoint (GESTimelineElement * self,
-    GstClockTime inpoint)
+ges_timeline_element_set_inpoint (GESTimelineElement * self, GstClockTime ts)
 {
-  GESTimelineElementClass *klass;
-
-  g_return_val_if_fail (GES_IS_TIMELINE_ELEMENT (self), FALSE);
-
-  GST_DEBUG_OBJECT (self, "current inpoint: %" GST_TIME_FORMAT
-      " new inpoint: %" GST_TIME_FORMAT, GST_TIME_ARGS (inpoint),
-      GST_TIME_ARGS (GES_TIMELINE_ELEMENT_INPOINT (self)));
-
-  klass = GES_TIMELINE_ELEMENT_GET_CLASS (self);
-
-  if (klass->set_inpoint) {
-    gboolean res = klass->set_inpoint (self, inpoint);
-    if (res == TRUE) {
-      self->inpoint = inpoint;
-      g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_INPOINT]);
-    }
-
-    return ! !res;
-  }
-
-  GST_DEBUG_OBJECT (self, "No set_inpoint virtual method implementation"
-      " on class %s. Can not set inpoint %" GST_TIME_FORMAT,
-      G_OBJECT_CLASS_NAME (klass), GST_TIME_ARGS (inpoint));
-
-  return FALSE;
+  return ges_timeline_element_set_inpoint_internal (self, ts, GES_FRAME_NONE);
 }
 
 /**
@@ -858,12 +1221,21 @@ ges_timeline_element_set_inpoint (GESTimelineElement * self,
  *
  * Set the maximun duration of the object
  *
- * Returns: %TRUE if @maxduration could be set.
+ * Returns: %TRUE if @max_duration could be set.
  */
 gboolean
 ges_timeline_element_set_max_duration (GESTimelineElement * self,
-    GstClockTime maxduration)
+    GstClockTime ts)
 {
+  return ges_timeline_element_set_max_duration_internal (self, ts,
+      GES_FRAME_NONE);
+}
+
+static gboolean
+ges_timeline_element_set_duration_internal (GESTimelineElement * self,
+    GstClockTime duration, GESFrameNumber fduration)
+{
+  gint res;
   GESTimelineElementClass *klass;
 
   g_return_val_if_fail (GES_IS_TIMELINE_ELEMENT (self), FALSE);
@@ -872,17 +1244,26 @@ ges_timeline_element_set_max_duration (GESTimelineElement * self,
 
   GST_DEBUG_OBJECT (self, "current duration: %" GST_TIME_FORMAT
       " new duration: %" GST_TIME_FORMAT,
-      GST_TIME_ARGS (GES_TIMELINE_ELEMENT_MAX_DURATION (self)),
-      GST_TIME_ARGS (maxduration));
+      GST_TIME_ARGS (GES_TIMELINE_ELEMENT_DURATION (self)),
+      GST_TIME_ARGS (duration));
 
-  if (klass->set_max_duration) {
-    if (klass->set_max_duration (self, maxduration) == FALSE)
-      return FALSE;
+  if (klass->set_duration_full)
+    res = klass->set_duration_full (self, duration, fduration);
+  else if (klass->set_duration)
+    res = klass->set_duration (self, duration);
+  else {
+    GST_WARNING_OBJECT (self, "No set_duration virtual method implementation"
+        " on class %s. Can not set duration %" GST_TIME_FORMAT,
+        G_OBJECT_CLASS_NAME (klass), GST_TIME_ARGS (duration));
+    return FALSE;
   }
 
-  self->maxduration = maxduration;
-  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_MAX_DURATION]);
-  return TRUE;
+  if (res == TRUE) {
+    self->duration = duration;
+    g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_DURATION]);
+  }
+
+  return ! !res;
 }
 
 /**
@@ -898,34 +1279,9 @@ ges_timeline_element_set_max_duration (GESTimelineElement * self,
  * Returns: %TRUE if @duration could be set.
  */
 gboolean
-ges_timeline_element_set_duration (GESTimelineElement * self,
-    GstClockTime duration)
+ges_timeline_element_set_duration (GESTimelineElement * self, GstClockTime ts)
 {
-  GESTimelineElementClass *klass;
-
-  g_return_val_if_fail (GES_IS_TIMELINE_ELEMENT (self), FALSE);
-
-  klass = GES_TIMELINE_ELEMENT_GET_CLASS (self);
-
-  GST_DEBUG_OBJECT (self, "current duration: %" GST_TIME_FORMAT
-      " new duration: %" GST_TIME_FORMAT,
-      GST_TIME_ARGS (GES_TIMELINE_ELEMENT_DURATION (self)),
-      GST_TIME_ARGS (duration));
-
-  if (klass->set_duration) {
-    gboolean res = klass->set_duration (self, duration);
-    if (res == TRUE) {
-      self->duration = duration;
-      g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_DURATION]);
-    }
-
-    return ! !res;
-  }
-
-  GST_WARNING_OBJECT (self, "No set_duration virtual method implementation"
-      " on class %s. Can not set duration %" GST_TIME_FORMAT,
-      G_OBJECT_CLASS_NAME (klass), GST_TIME_ARGS (duration));
-  return FALSE;
+  return ges_timeline_element_set_duration_internal (self, ts, GES_FRAME_NONE);
 }
 
 /**
@@ -1973,13 +2329,15 @@ ges_timeline_element_get_layer_priority (GESTimelineElement * self)
  */
 gboolean
 ges_timeline_element_edit (GESTimelineElement * self, GList * layers,
-    gint64 new_layer_priority, GESEditMode mode, GESEdge edge, guint64 position)
+    gint64 new_layer_priority, GESEditMode mode, GESEdge edge,
+    GstClockTime position)
 {
   GESTimeline *timeline;
 
   g_return_val_if_fail (GES_IS_TIMELINE_ELEMENT (self), FALSE);
 
   timeline = GES_TIMELINE_ELEMENT_TIMELINE (self);
+
   switch (mode) {
     case GES_EDIT_MODE_RIPPLE:
       return timeline_ripple_object (timeline, self,
@@ -2000,6 +2358,407 @@ ges_timeline_element_edit (GESTimelineElement * self, GList * layers,
       return timeline_roll_object (timeline, self, layers, edge, position);
     case GES_EDIT_MODE_SLIDE:
       GST_ERROR_OBJECT (self, "Sliding not implemented.");
+      return FALSE;
+  }
+  return FALSE;
+}
+
+/**
+ * ges_timeline_element_get_natural_framerate:
+ * @self: The #GESTimelineElement to get "natural" framerate from
+ * @framerate_n: (out): The framerate numerator
+ * @framerate_d: (out): The framerate denominator
+ *
+ * Get the "natural" framerate of @self. This is to say, for example
+ * for a #GESVideoUriSource the framerate of the s.
+ *
+ * Returns: Whether @self has a natural framerate or not, @framerate_n
+ * and @framerate_d will be set to, respectively, 0 and -1 if it is
+ * not the case.
+ *
+ * Since: 1.18
+ */
+gboolean
+ges_timeline_element_get_natural_framerate (GESTimelineElement * self,
+    gint * framerate_n, gint * framerate_d)
+{
+  GESTimelineElementClass *klass;
+
+  g_return_val_if_fail (GES_IS_TIMELINE_ELEMENT (self), FALSE);
+  g_return_val_if_fail (framerate_n && framerate_d, FALSE);
+
+  klass = GES_TIMELINE_ELEMENT_GET_CLASS (self);
+
+  *framerate_n = 0;
+  *framerate_d = -1;
+  return klass->get_natural_framerate (self, framerate_n, framerate_d);
+}
+
+static gboolean
+_set_time_from_frame (GESTimelineElement * self, GESFrameNumber frame,
+    TimeCodeIndex timecode_index, GstClockTime * ntime, SetTimestampFunc func)
+{
+  gint framerate_n, framerate_d;
+  GstVideoTimeCodeFlags flags;
+  GESTimeCode *tc, prev_tc;
+
+  if (!ges_timeline_element_get_timecodes_config (self, timecode_index,
+          &framerate_n, &framerate_d, &flags))
+    return TRUE;
+
+  tc = &self->priv->timecodes[timecode_index];
+  GST_DEBUG ("Setting %s: " FRAMES_FORMAT "@%d/%d", tc->propname,
+      FRAMES_ARGS (frame), framerate_n, framerate_d);
+  if (!ges_time_code_init (tc, frame, framerate_n, framerate_d, flags)) {
+    GST_ERROR_OBJECT (self,
+        "Initialized timecode is not valid " FRAMES_FORMAT "@%d/%dfps",
+        FRAMES_ARGS (frame), framerate_n, framerate_d);
+    gst_video_time_code_clear (TIMECODE (tc));
+
+    return FALSE;
+  }
+
+  *ntime = ges_time_code_get_ts (tc);
+  prev_tc = *tc;
+  GST_DEBUG_OBJECT (self, "Setting %s to %" GST_TIME_FORMAT FRAMES_FORMAT,
+      tc->propname, GST_TIME_ARGS (*ntime), FRAMES_ARGS (frame));
+  tc->n_frames = frame;
+  tc->is_used = TRUE;
+  if (func (self, *ntime, frame))
+    return TRUE;
+
+  *tc = prev_tc;
+  GST_ERROR_OBJECT (self, "FAILED setting %s to %" GST_TIME_FORMAT,
+      tc->propname, GST_TIME_ARGS (*ntime));
+  return FALSE;
+}
+
+static gboolean
+_set_timecode (GESTimelineElement * self, GESFrameNumber frame,
+    guint timecode_index, SetTimestampFunc set_property)
+{
+  GstClockTime ntime;
+  GESTimeCode *tc = &self->priv->timecodes[timecode_index];
+  g_return_val_if_fail (GES_IS_TIMELINE_ELEMENT (self), FALSE);
+
+  if (!self->timeline) {
+    tc->n_frames = frame;
+    GST_DEBUG_OBJECT (self, "No timeline set, caching %s for later",
+        tc->propname);
+    return TRUE;
+  }
+
+  return _set_time_from_frame (self, frame, timecode_index, &ntime,
+      set_property);
+}
+
+/**
+ * ges_timeline_element_set_fstart:
+ * @self: The #GESTimelineElement on which to set starting time
+ * in number of frames
+ * @start_frame: The number of the frame the element should start at
+ *
+ * Sets time in frame from which @self is going to be used inside its containing
+ * timeline. The scale is the #GESTimeline:framerate of the timeline in which
+ * it is.
+ *
+ * Returns: %TRUE if @start_frame could be set, %FALSE otherwise
+ *
+ * Since: 1.18
+ */
+gboolean
+ges_timeline_element_set_fstart (GESTimelineElement * self,
+    GESFrameNumber frame)
+{
+  return _set_timecode (self, frame, START_TC,
+      ges_timeline_element_set_start_internal);
+}
+
+/**
+ * ges_timeline_element_set_finpoint:
+ * @self: The #GESTimelineElement on which to set the inpoint time
+ * in number of frames
+ * @inpoint_frame: The number of the first frame the element will output from
+ * the source it represents
+ *
+ * Sets the frame number the element uses as 'inpoint', the inpoint is in
+ * the underlying source scale, meaning that the framerate used is the
+ * one returned by #ges_timeline_element_get_natural_framerate.
+ *
+ * In the case of a video file, @inpoint_frame is the frame number of the
+ * first outputed frame from that file when it is played in the timeline.
+ *
+ * Returns: %TRUE if @inpoint_frame could be set, %FALSE otherwise
+ *
+ * Since: 1.18
+ */
+gboolean
+ges_timeline_element_set_finpoint (GESTimelineElement * self,
+    GESFrameNumber frame)
+{
+  return _set_timecode (self, frame, INPOINT_TC,
+      ges_timeline_element_set_inpoint_internal);
+}
+
+/**
+ * ges_timeline_element_set_fduration:
+ * @self: The #GESTimelineElement on which to set duration time
+ * in number of frames
+ * @number_of_frames: The number of the frames the element lasts inside the timeline
+ *
+ * Sets the number of frames that @self will last in the timeline,
+ * The scale is the #GESTimeline:framerate of the timeline it belongs to.
+ *
+ * Returns: %TRUE if @number_of_frames could be set, %FALSE otherwise
+ *
+ * Since: 1.18
+ */
+gboolean
+ges_timeline_element_set_fduration (GESTimelineElement * self,
+    GESFrameNumber frame)
+{
+  return _set_timecode (self, frame, DURATION_TC,
+      ges_timeline_element_set_duration_internal);
+}
+
+/**
+ * ges_timeline_element_set_fmax_duration:
+ * @self: The #GESTimelineElement on which to set maximum duration time
+ * in number of frames
+ * @total_number_of_frames: The maximum number of frames the element can last inside a
+ * timeline
+ *
+ * Sets the frame number the element can output in the timeline, the
+ * maxduration is in the underlying source scale, meaning that the
+ * framerate used is the one returned by
+ * #ges_timeline_element_get_natural_framerate.
+ *
+ * Returns: %TRUE if @total_number_of_frames could be set, %FALSE otherwise
+ *
+ * Since: 1.18
+ */
+gboolean
+ges_timeline_element_set_fmax_duration (GESTimelineElement * self,
+    GESFrameNumber frame)
+{
+  return _set_timecode (self, frame, MAX_DURATION_TC,
+      ges_timeline_element_set_max_duration_internal);
+}
+
+#define RETURN_PROPERTY_IN_FRAME(timecode_index) G_STMT_START {       \
+  GESTimeCode *tc = &self->priv->timecodes[timecode_index];           \
+  if (!self->timeline)                                                \
+    return tc->n_frames;                                              \
+  if (!tc->is_used)                                                   \
+    return GES_FRAME_NONE;                                                  \
+  return gst_video_time_code_frames_since_daily_jam (TIMECODE(tc));   \
+} G_STMT_END
+
+/**
+ * ges_timeline_get_fstart:
+ * @self: The #GESTimelineElement to retrieve the start in frame from
+ *
+ * See #ges_timeline_element_set_fstart for more information
+ *
+ * NOTE: The return value will be #ges_
+ *
+ * Returns: The number of frames the element starts at in the timeline.
+ *
+ * Since: 1.18
+ */
+GESFrameNumber
+ges_timeline_element_get_fstart (GESTimelineElement * self)
+{
+  g_return_val_if_fail (GES_IS_TIMELINE_ELEMENT (self), FALSE);
+  RETURN_PROPERTY_IN_FRAME (START_TC);
+}
+
+/**
+ * ges_timeline_get_finpoint:
+ * @self: The #GESTimelineElement to retrieve the inpoint in frame from
+ *
+ * See #ges_timeline_element_set_finpoint for more information
+ *
+ * NOTE: The return value will be #ges_
+ *
+ * Returns: The number of frames the element starts at in the timeline.
+ *
+ * Since: 1.18
+ */
+GESFrameNumber
+ges_timeline_element_get_finpoint (GESTimelineElement * self)
+{
+  g_return_val_if_fail (GES_IS_TIMELINE_ELEMENT (self), FALSE);
+  RETURN_PROPERTY_IN_FRAME (INPOINT_TC);
+}
+
+/**
+ * ges_timeline_get_fduration:
+ * @self: The #GESTimelineElement to retrieve the duration in frame from
+ *
+ * See #ges_timeline_element_set_fduration for more information
+ *
+ * NOTE: The return value will be #GES_FRAME_NONE until the duration
+ * is set in number of frames
+ *
+ * Returns: The number of frames the element lasts in the timeline.
+ *
+ * Since: 1.18
+ */
+GESFrameNumber
+ges_timeline_element_get_fduration (GESTimelineElement * self)
+{
+  g_return_val_if_fail (GES_IS_TIMELINE_ELEMENT (self), FALSE);
+  RETURN_PROPERTY_IN_FRAME (DURATION_TC);
+}
+
+/**
+ * ges_timeline_get_fmax_duration:
+ * @self: The #GESTimelineElement to retrieve the maximum duration in frame from
+ *
+ * See #ges_timeline_element_set_fmax_duration for more information
+ *
+ * Returns: The number of frames the element starts at in the timeline.
+ *
+ * Since: 1.18
+ */
+GESFrameNumber
+ges_timeline_element_get_fmax_duration (GESTimelineElement * self)
+{
+  g_return_val_if_fail (GES_IS_TIMELINE_ELEMENT (self), FALSE);
+  RETURN_PROPERTY_IN_FRAME (MAX_DURATION_TC);
+}
+
+/**
+ * ges_timeline_get_ftrim:
+ * @self: The #GESTimelineElement to trim the start
+ * @start_frame: The absolute number of the first frame the element
+ * will be trimed at in timeline scale
+ *
+ * Trims @self at @start_frame in the timeline reference frame.
+ *
+ * Returns: %TRUE if the timeline element could be trimmed % FALSE otherwise.
+ *
+ * Since: 1.18
+ */
+gboolean
+ges_timeline_element_ftrim (GESTimelineElement * self,
+    GESFrameNumber start_frame)
+{
+  gboolean res;
+  gint64 frame_diff;
+  GstClockTimeDiff diff = G_MAXINT64;
+
+  g_return_val_if_fail (GES_IS_TIMELINE_ELEMENT (self), FALSE);
+
+  if (!ges_timeline_element_reset_framerate_on_edge (self, GES_EDGE_START,
+          TRUE))
+    return FALSE;
+
+  frame_diff =
+      GST_CLOCK_DIFF (start_frame, ges_timeline_element_get_fstart (self));
+
+  if (!ges_timeline_element_get_frames_ts (self, frame_diff, &diff, FALSE)) {
+    GST_ERROR_OBJECT (self, "Could not get timestamp for frames");
+    return FALSE;
+  }
+
+  res = timeline_tree_trim (timeline_get_tree (self->timeline), self, 0,
+      diff, GES_EDGE_START,
+      ges_timeline_get_snapping_distance (self->timeline), frame_diff);
+
+  return res;
+}
+
+/**
+ * ges_timeline_element_fedit:
+ * @self: the #GESClip to edit in frame
+ * @layers: (element-type GESLayer): The layers you want the edit to
+ * happen in, %NULL means that the edition is done in all the
+ * #GESLayers contained in the current timeline.
+ * @new_layer_priority: The priority of the layer @self should land in.
+ * If the layer you're trying to move the element to doesn't exist, it will
+ * be created automatically. -1 means no move.
+ * @mode: The #GESEditMode in which the editition will happen.
+ * @edge: The #GESEdge the edit should happen on.
+ * @frames: The position at which to edit @self (in nanosecond)
+ *
+ * Edit @self in the different exisiting #GESEditMode modes. In the case of
+ * slide, and roll, you need to specify a #GESEdge
+ *
+ * Returns: %TRUE if @self as been edited properly, %FALSE if an error
+ * occured
+ */
+gboolean
+ges_timeline_element_fedit (GESTimelineElement * self, GList * layers,
+    gint64 new_layer_priority, GESEditMode mode, GESEdge edge,
+    GESFrameNumber frames)
+{
+  GESTimeline *timeline;
+  gint framerate_n, framerate_d;
+  gint64 layer_prio_off = 0;
+
+  g_return_val_if_fail (GES_IS_TIMELINE_ELEMENT (self), FALSE);
+
+  timeline = GES_TIMELINE_ELEMENT_TIMELINE (self);
+  if (!timeline) {
+    GST_WARNING_OBJECT (self, "Trying to edit in frame but not in a timeline.");
+
+    return FALSE;
+  }
+
+  if (!ges_timeline_get_timecodes_config (timeline, &framerate_n, &framerate_d,
+          NULL)) {
+    GST_WARNING_OBJECT (self,
+        "Trying to edit in frame but no framerate set on the timeline.");
+
+    return FALSE;
+  }
+
+  if (new_layer_priority > 0)
+    layer_prio_off =
+        (gint64) GES_TIMELINE_ELEMENT_LAYER_PRIORITY (self) -
+        new_layer_priority;
+
+  switch (mode) {
+    case GES_EDIT_MODE_TRIM:
+    {
+      gint64 frame_diff;
+      GstClockTimeDiff diff;
+
+      if (edge == GES_EDGE_NONE) {
+        GST_ERROR_OBJECT (self, "Can not trim on 'EDGE_NONE'");
+
+        return FALSE;
+      }
+
+      if (!ges_timeline_element_reset_framerate_on_edge (self, edge, TRUE))
+        return FALSE;
+
+      if (edge == GES_EDGE_START)
+        frame_diff =
+            GST_CLOCK_DIFF (frames, ges_timeline_element_get_fstart (self));
+      else
+        frame_diff =
+            GST_CLOCK_DIFF (frames,
+            ges_timeline_element_get_fstart (self) +
+            ges_timeline_element_get_fduration (self));
+
+      if (!ges_timeline_element_get_frames_ts (self, frame_diff, &diff, FALSE)) {
+        GST_ERROR_OBJECT (self, "Could not get timestamp for frames");
+
+        return FALSE;
+      }
+
+      return timeline_tree_trim (timeline_get_tree (timeline), self,
+          layer_prio_off, diff, edge,
+          ges_timeline_get_snapping_distance (timeline), frame_diff);
+    }
+    case GES_EDIT_MODE_RIPPLE:
+    case GES_EDIT_MODE_NORMAL:
+    case GES_EDIT_MODE_ROLL:
+    case GES_EDIT_MODE_SLIDE:
+      GST_ERROR ("Sliding not implemented.");
       return FALSE;
   }
   return FALSE;

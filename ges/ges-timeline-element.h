@@ -201,11 +201,11 @@ struct _GESTimelineElementClass
   gboolean (*set_max_duration) (GESTimelineElement * self, GstClockTime maxduration);
   gboolean (*set_priority)     (GESTimelineElement * self, guint32 priority); /* set_priority is now protected */
 
-  gboolean (*ripple)           (GESTimelineElement *self, guint64  start);
-  gboolean (*ripple_end)       (GESTimelineElement *self, guint64  end);
-  gboolean (*roll_start)       (GESTimelineElement *self, guint64  start);
-  gboolean (*roll_end)         (GESTimelineElement *self, guint64  end);
-  gboolean (*trim)             (GESTimelineElement *self, guint64  start);
+  gboolean (*ripple)           (GESTimelineElement *self, GstClockTime  start);
+  gboolean (*ripple_end)       (GESTimelineElement *self, GstClockTime  end);
+  gboolean (*roll_start)       (GESTimelineElement *self, GstClockTime  start);
+  gboolean (*roll_end)         (GESTimelineElement *self, GstClockTime  end);
+  gboolean (*trim)             (GESTimelineElement *self, GstClockTime  start);
   void     (*deep_copy)        (GESTimelineElement *self, GESTimelineElement *copy);
 
   GESTimelineElement * (*paste) (GESTimelineElement *self,
@@ -218,12 +218,16 @@ struct _GESTimelineElementClass
   GESTrackType (*get_track_types)          (GESTimelineElement * self);
   void         (*set_child_property)       (GESTimelineElement * self, GObject *child,
                                             GParamSpec *pspec, GValue *value);
-
   guint32      (*get_layer_priority)       (GESTimelineElement *self);
 
   /*< private > */
+  gboolean (*get_natural_framerate) (GESTimelineElement * self, gint *framerate_n, gint *framerate_d);
+  gboolean (*set_start_full)        (GESTimelineElement * self, GstClockTime start, GESFrameNumber fstart);
+  gboolean (*set_inpoint_full)      (GESTimelineElement * self, GstClockTime inpoint, GESFrameNumber finpoint);
+  gboolean (*set_duration_full)     (GESTimelineElement * self, GstClockTime duration, GESFrameNumber fduration);
+  gboolean (*set_max_duration_full) (GESTimelineElement * self, GstClockTime maxduration, GESFrameNumber fmaxduration);
   /* Padding for API extension */
-  gpointer _ges_reserved[GES_PADDING_LARGE - 4];
+  gpointer _ges_reserved[GES_PADDING_LARGE - 9];
 };
 
 GES_API
@@ -243,25 +247,45 @@ GES_API
 gboolean             ges_timeline_element_set_start                   (GESTimelineElement *self,
                                                                        GstClockTime start);
 GES_API
+gboolean             ges_timeline_element_set_fstart                  (GESTimelineElement * self,
+                                                                       GESFrameNumber start_frame);
+GES_API
 gboolean             ges_timeline_element_set_inpoint                 (GESTimelineElement *self,
                                                                        GstClockTime inpoint);
+GES_API
+gboolean             ges_timeline_element_set_finpoint                (GESTimelineElement * self,
+                                                                       GESFrameNumber inpoint_frame);
 GES_API
 gboolean             ges_timeline_element_set_duration                (GESTimelineElement *self,
                                                                        GstClockTime duration);
 GES_API
+gboolean             ges_timeline_element_set_fduration               (GESTimelineElement * self,
+                                                                       GESFrameNumber number_of_frames);
+GES_API
 gboolean             ges_timeline_element_set_max_duration            (GESTimelineElement *self,
                                                                        GstClockTime maxduration);
+GES_API
+gboolean             ges_timeline_element_set_fmax_duration           (GESTimelineElement * self,
+                                                                       GESFrameNumber total_number_of_frames);
 GES_API
 gboolean             ges_timeline_element_set_priority                (GESTimelineElement *self,
                                                                        guint32 priority);
 GES_API
 GstClockTime         ges_timeline_element_get_start                   (GESTimelineElement *self);
 GES_API
+GESFrameNumber       ges_timeline_element_get_fstart                  (GESTimelineElement * self);
+GES_API
 GstClockTime         ges_timeline_element_get_inpoint                 (GESTimelineElement *self);
+GES_API
+GESFrameNumber       ges_timeline_element_get_finpoint                (GESTimelineElement * self);
 GES_API
 GstClockTime         ges_timeline_element_get_duration                (GESTimelineElement *self);
 GES_API
+GESFrameNumber       ges_timeline_element_get_fduration               (GESTimelineElement *self);
+GES_API
 GstClockTime         ges_timeline_element_get_max_duration            (GESTimelineElement *self);
+GES_API
+GESFrameNumber       ges_timeline_element_get_fmax_duration           (GESTimelineElement *self);
 GES_API
 GESTimeline *        ges_timeline_element_get_timeline                (GESTimelineElement *self);
 GES_API
@@ -281,6 +305,9 @@ gboolean             ges_timeline_element_roll_end                    (GESTimeli
 GES_API
 gboolean             ges_timeline_element_trim                        (GESTimelineElement *self,
                                                                        GstClockTime  start);
+GES_API
+gboolean             ges_timeline_element_ftrim                       (GESTimelineElement *self,
+                                                                       GESFrameNumber start_frame);
 GES_API
 GESTimelineElement * ges_timeline_element_copy                        (GESTimelineElement *self,
                                                                        gboolean deep);
@@ -339,6 +366,10 @@ GESTimelineElement * ges_timeline_element_paste                       (GESTimeli
                                                                        GstClockTime paste_position);
 GES_API
 GESTrackType         ges_timeline_element_get_track_types             (GESTimelineElement * self);
+GES_API
+gboolean             ges_timeline_element_get_natural_framerate       (GESTimelineElement *self,
+                                                                       gint *framerate_n,
+                                                                       gint *framerate_d);
 
 GES_API
 guint32 ges_timeline_element_get_layer_priority                       (GESTimelineElement * self);
@@ -349,7 +380,15 @@ gboolean ges_timeline_element_edit                                    (GESTimeli
                                                                        gint64 new_layer_priority,
                                                                        GESEditMode mode,
                                                                        GESEdge edge,
-                                                                       guint64 position);
+                                                                       GstClockTime position);
+
+GES_API
+gboolean ges_timeline_element_fedit                                   (GESTimelineElement * self,
+                                                                       GList * layers,
+                                                                       gint64 new_layer_priority,
+                                                                       GESEditMode mode,
+                                                                       GESEdge edge,
+                                                                       GESFrameNumber frames);
 
 G_END_DECLS
 

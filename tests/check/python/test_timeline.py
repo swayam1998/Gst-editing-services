@@ -93,30 +93,30 @@ class TestTimeline(common.GESSimpleTimelineTest):
         clip2 = self.add_clip(50, 0, 100)
         self.assertTimelineTopology([
             [  # Unique layer
-                (GES.TestClip, 0, 100),
-                (GES.TransitionClip, 50, 50),
-                (GES.TestClip, 50, 100)
+                (GES.TestClip, 0, 0, 100),
+                (GES.TransitionClip, 50, 0, 50),
+                (GES.TestClip, 50, 0, 100)
             ]
         ])
 
         clip1.split(25)
         self.assertTimelineTopology([
             [  # Unique layer
-                (GES.TestClip, 0, 25),
-                (GES.TestClip, 25, 75),
-                (GES.TransitionClip, 50, 50),
-                (GES.TestClip, 50, 100),
+                (GES.TestClip, 0, 0, 25),
+                (GES.TestClip, 25, 25, 75),
+                (GES.TransitionClip, 50, 0, 50),
+                (GES.TestClip, 50, 0, 100),
             ]
         ])
 
         clip2.split(125)
         self.assertTimelineTopology([
             [  # Unique layer
-                (GES.TestClip, 0, 25),
-                (GES.TestClip, 25, 75),
-                (GES.TransitionClip, 50, 50),
-                (GES.TestClip, 50, 75),
-                (GES.TestClip, 125, 25),
+                (GES.TestClip, 0, 0, 25),
+                (GES.TestClip, 25, 25, 75),
+                (GES.TransitionClip, 50, 0, 50),
+                (GES.TestClip, 50, 0, 75),
+                (GES.TestClip, 125, 75, 25),
             ]
         ])
 

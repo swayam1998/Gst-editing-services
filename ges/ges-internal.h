@@ -22,6 +22,7 @@
 #define __GES_INTERNAL_H__
 #include <gst/gst.h>
 #include <gst/pbutils/encoding-profile.h>
+#include <gst/video/video.h>
 #include <gio/gio.h>
 
 #include "ges-timeline.h"
@@ -31,6 +32,7 @@
 #include "ges-asset.h"
 #include "ges-base-xml-formatter.h"
 #include "ges-timeline-tree.h"
+#include "ges-time-code.h"
 
 G_BEGIN_DECLS
 
@@ -47,30 +49,48 @@ GST_DEBUG_CATEGORY_EXTERN (_ges_debug);
 #define LAYER_HEIGHT 1000
 
 #define _START(obj) GES_TIMELINE_ELEMENT_START (obj)
+#define _FSTART(obj) (ges_timeline_element_get_fstart(GES_TIMELINE_ELEMENT((obj))))
 #define _INPOINT(obj) GES_TIMELINE_ELEMENT_INPOINT (obj)
+#define _FINPOINT(obj) (ges_timeline_element_get_finpoint(GES_TIMELINE_ELEMENT((obj))))
 #define _DURATION(obj) GES_TIMELINE_ELEMENT_DURATION (obj)
+#define _FDURATION(obj) (ges_timeline_element_get_fduration(GES_TIMELINE_ELEMENT((obj))))
 #define _MAXDURATION(obj) GES_TIMELINE_ELEMENT_MAX_DURATION (obj)
+#define _FMAXDURATION(obj) (ges_timeline_element_get_fmax_duration(GES_TIMELINE_ELEMENT((obj))))
 #define _PRIORITY(obj) GES_TIMELINE_ELEMENT_PRIORITY (obj)
-#ifndef _END
 #define _END(obj) (_START (obj) + _DURATION (obj))
-#endif
+#define _FEND(obj) ((GES_FRAME_IS_VALID (_FSTART (obj)) && GES_FRAME_IS_VALID (_FDURATION(obj))) ? \
+  _FSTART(obj) + _FDURATION (obj) : GES_FRAME_NONE)
+
 #define _set_start0 ges_timeline_element_set_start
 #define _set_inpoint0 ges_timeline_element_set_inpoint
 #define _set_duration0 ges_timeline_element_set_duration
 #define _set_priority0 ges_timeline_element_set_priority
 
-#define GES_TIMELINE_ELEMENT_FORMAT \
-    "s<%p>" \
-    " [ %" GST_TIME_FORMAT \
-    " (%" GST_TIME_FORMAT \
-    ") - %" GST_TIME_FORMAT "(%" GST_TIME_FORMAT") layer: %" G_GINT32_FORMAT "] "
+#define _set_fstart0(o,fs) (ges_timeline_element_set_fstart((GESTimelineElement*)(o), (fs)))
+#define _set_finpoint0(o,fi) (ges_timeline_element_set_finpoint((GESTimelineElement*)(o), (fi)))
+#define _set_fduration0(o,fd) (ges_timeline_element_set_fduration((GESTimelineElement*)(o), (fd)))
+
+#define FRAMES_FORMAT "(%" G_GINT64_FORMAT "f)"
+#define FRAMES_ARGS(f) (GES_FRAME_IS_VALID((f)) ? (f) : -1)
+
+#define GES_TIMELINE_ELEMENT_FORMAT       \
+    "s<%p>"                               \
+    " [ %" GST_TIME_FORMAT FRAMES_FORMAT  \
+    " (%" GST_TIME_FORMAT FRAMES_FORMAT   \
+    ") - %" GST_TIME_FORMAT FRAMES_FORMAT \
+    "(%" GST_TIME_FORMAT FRAMES_FORMAT    \
+    ") layer: %" G_GINT32_FORMAT "] "
 
 #define GES_TIMELINE_ELEMENT_ARGS(element) \
     GES_TIMELINE_ELEMENT_NAME(element), element, \
     GST_TIME_ARGS(GES_TIMELINE_ELEMENT_START(element)), \
+    FRAMES_ARGS(_FSTART(element)), \
     GST_TIME_ARGS(GES_TIMELINE_ELEMENT_INPOINT(element)), \
+    FRAMES_ARGS(_FINPOINT(element)), \
     GST_TIME_ARGS(GES_TIMELINE_ELEMENT_DURATION(element)), \
+    FRAMES_ARGS(_FDURATION(element)), \
     GST_TIME_ARGS(GES_TIMELINE_ELEMENT_MAX_DURATION(element)), \
+    FRAMES_ARGS(_FMAXDURATION(element)), \
     GES_TIMELINE_ELEMENT_LAYER_PRIORITY(element)
 
 #define GES_FORMAT GES_TIMELINE_ELEMENT_FORMAT
@@ -143,7 +163,9 @@ void
 timeline_fill_gaps            (GESTimeline *timeline);
 
 G_GNUC_INTERNAL void
-timeline_create_transitions (GESTimeline * timeline, GESTrackElement * track_element);
+timeline_create_transitions  (GESTimeline * timeline, GESTrackElement * track_element);
+G_GNUC_INTERNAL gboolean
+timeline_trim_transition     (GESTimeline * timeline, GESTimelineElement * element, GESEdge edge, GstClockTime position);
 
 G_GNUC_INTERNAL
 void
@@ -417,10 +439,11 @@ typedef enum
   GES_TIMELINE_ELEMENT_SET_SIMPLE = (1 << 1),
 } GESTimelineElementFlags;
 
-G_GNUC_INTERNAL gdouble ges_timeline_element_get_media_duration_factor(GESTimelineElement *self);
-G_GNUC_INTERNAL GESTimelineElement * ges_timeline_element_get_copied_from (GESTimelineElement *self);
+G_GNUC_INTERNAL gdouble                 ges_timeline_element_get_media_duration_factor(GESTimelineElement *self);
+G_GNUC_INTERNAL GESTimelineElement *    ges_timeline_element_get_copied_from (GESTimelineElement *self);
 G_GNUC_INTERNAL GESTimelineElementFlags ges_timeline_element_flags (GESTimelineElement *self);
-G_GNUC_INTERNAL void                ges_timeline_element_set_flags (GESTimelineElement *self, GESTimelineElementFlags flags);
+G_GNUC_INTERNAL void                    ges_timeline_element_set_flags (GESTimelineElement *self, GESTimelineElementFlags flags);
+G_GNUC_INTERNAL gboolean                ges_timeline_element_reset_framerate_on_edge (GESTimelineElement * self, GESEdge edge, gboolean force);
 
 #define ELEMENT_FLAGS(obj)             (ges_timeline_element_flags (GES_TIMELINE_ELEMENT(obj)))
 #define ELEMENT_SET_FLAG(obj,flag)     (ges_timeline_element_set_flags(GES_TIMELINE_ELEMENT(obj), (ELEMENT_FLAGS(obj) | (flag))))

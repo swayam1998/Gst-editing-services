@@ -25,6 +25,7 @@
 #include <gst/video/video.h>
 
 #include "gstframepositioner.h"
+#include "ges-internal.h"
 
 /* We  need to define a max number of pixel so we can interpolate them */
 #define MAX_PIXELS 100000
@@ -74,19 +75,22 @@ G_DEFINE_TYPE (GstFramePositioner, gst_frame_positioner,
 static void
 _weak_notify_cb (GstFramePositioner * pos, GObject * old)
 {
-  pos->current_track = NULL;
+  if (old == (GObject *) pos->current_track)
+    pos->current_track = NULL;
+  if (old == (GObject *) pos->current_timeline)
+    pos->current_timeline = NULL;
 }
 
 static void
 gst_frame_positioner_update_properties (GstFramePositioner * pos,
-    gboolean track_mixing, gint old_track_width, gint old_track_height)
+    int track_mixing, gint old_track_width, gint old_track_height)
 {
   GstCaps *caps;
 
   if (pos->capsfilter == NULL)
     return;
 
-  if (pos->track_width && pos->track_height &&
+  if (track_mixing != -1 && pos->track_width && pos->track_height &&
       (!track_mixing || !pos->scale_in_compositor)) {
     caps =
         gst_caps_new_simple ("video/x-raw", "width", G_TYPE_INT,
@@ -117,7 +121,8 @@ gst_frame_positioner_update_properties (GstFramePositioner * pos,
     pos->height = pos->track_height;
   }
 
-  GST_DEBUG_OBJECT (caps, "setting caps");
+  GST_INFO_OBJECT (caps, "setting caps %" GES_FORMAT,
+      GES_ARGS (pos->track_source));
 
   g_object_set (pos->capsfilter, "caps", caps, NULL);
 
@@ -143,9 +148,6 @@ sync_properties_from_track (GstFramePositioner * pos, GESTrack * track)
       width = 0;
     if (!gst_structure_get_int (structure, "height", &height))
       height = 0;
-    if (!gst_structure_get_fraction (structure, "framerate", &(pos->fps_n),
-            &(pos->fps_d)))
-      pos->fps_n = -1;
 
     if (!gst_structure_get_fraction (structure, "pixel-aspect-ratio",
             &(pos->par_n), &(pos->par_d)))
@@ -158,8 +160,6 @@ sync_properties_from_track (GstFramePositioner * pos, GESTrack * track)
   pos->track_width = width;
   pos->track_height = height;
 
-  GST_DEBUG_OBJECT (pos, "syncing framerate from caps : %d/%d", pos->fps_n,
-      pos->fps_d);
   if (caps)
     gst_caps_unref (caps);
 
@@ -172,6 +172,21 @@ _track_restriction_changed_cb (GESTrack * track, GParamSpec * arg G_GNUC_UNUSED,
     GstFramePositioner * pos)
 {
   sync_properties_from_track (pos, track);
+}
+
+static void
+sync_properties_from_timeline (GstFramePositioner * pos, GESTimeline * timeline)
+{
+  ges_timeline_get_timecodes_config (timeline, &pos->fps_n, &pos->fps_d, NULL);
+
+  gst_frame_positioner_update_properties (pos, -1, 0, 0);
+}
+
+static void
+_timeline_framerate_changed_cb (GESTimeline * timeline,
+    GParamSpec * arg G_GNUC_UNUSED, GstFramePositioner * pos)
+{
+  sync_properties_from_timeline (pos, timeline);
 }
 
 static void
@@ -202,10 +217,44 @@ set_track (GstFramePositioner * pos)
 }
 
 static void
+set_timeline (GstFramePositioner * pos)
+{
+  GESTimeline *new_timeline;
+
+  if (pos->current_timeline) {
+    g_signal_handlers_disconnect_by_func (pos->current_timeline,
+        (GCallback) _track_restriction_changed_cb, pos);
+    g_object_weak_unref (G_OBJECT (pos->current_timeline),
+        (GWeakNotify) _weak_notify_cb, pos);
+  }
+
+  new_timeline = GES_TIMELINE_ELEMENT_TIMELINE (pos->track_source);
+  if (new_timeline) {
+    pos->current_timeline = new_timeline;
+    g_object_weak_ref (G_OBJECT (new_timeline), (GWeakNotify) _weak_notify_cb,
+        pos);
+    GST_DEBUG_OBJECT (pos, "connecting to track : %p", pos->current_timeline);
+
+    g_signal_connect (pos->current_timeline, "notify::framerate",
+        (GCallback) _timeline_framerate_changed_cb, pos);
+    sync_properties_from_timeline (pos, pos->current_timeline);
+  } else {
+    pos->current_timeline = NULL;
+  }
+}
+
+static void
 _track_changed_cb (GESTrackElement * trksrc, GParamSpec * arg G_GNUC_UNUSED,
     GstFramePositioner * pos)
 {
   set_track (pos);
+}
+
+static void
+_timeline_changed_cb (GESTrackElement * trksrc, GParamSpec * arg G_GNUC_UNUSED,
+    GstFramePositioner * pos)
+{
+  set_timeline (pos);
 }
 
 static void
@@ -227,7 +276,10 @@ ges_frame_positioner_set_source_and_filter (GstFramePositioner * pos,
       (GWeakNotify) _trk_element_weak_notify_cb, gst_object_ref (pos));
   g_signal_connect (trksrc, "notify::track", (GCallback) _track_changed_cb,
       pos);
+  g_signal_connect (trksrc, "notify::timeline",
+      (GCallback) _timeline_changed_cb, pos);
   set_track (pos);
+  set_timeline (pos);
 }
 
 static void
@@ -238,6 +290,8 @@ gst_frame_positioner_dispose (GObject * object)
   if (pos->track_source) {
     g_signal_handlers_disconnect_by_func (pos->track_source, _track_changed_cb,
         pos);
+    g_signal_handlers_disconnect_by_func (pos->track_source,
+        _timeline_changed_cb, pos);
     pos->track_source = NULL;
   }
 
@@ -245,6 +299,8 @@ gst_frame_positioner_dispose (GObject * object)
     g_signal_handlers_disconnect_by_func (pos->current_track,
         _track_restriction_changed_cb, pos);
     g_object_weak_unref (G_OBJECT (pos->current_track),
+        (GWeakNotify) _weak_notify_cb, pos);
+    g_object_weak_unref (G_OBJECT (pos->current_timeline),
         (GWeakNotify) _weak_notify_cb, pos);
     pos->current_track = NULL;
   }

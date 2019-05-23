@@ -78,8 +78,8 @@ static GESTrackElement
 static void ges_uri_clip_set_uri (GESUriClip * self, gchar * uri);
 
 gboolean
-uri_clip_set_max_duration (GESTimelineElement * element,
-    GstClockTime maxduration);
+uri_clip_set_max_duration_full (GESTimelineElement * element,
+    GstClockTime maxduration, GESFrameNumber fmaxduration);
 
 static void
 ges_uri_clip_get_property (GObject * object, guint property_id,
@@ -129,6 +129,32 @@ ges_uri_clip_set_property (GObject * object, guint property_id,
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
   }
+}
+
+static gboolean
+_get_natural_framerate (GESTimelineElement * self, gint * framerate_n,
+    gint * framerate_d)
+{
+  GList *tmp;
+  GESAsset *asset = ges_extractable_get_asset (GES_EXTRACTABLE (self));
+
+  asset = ges_extractable_get_asset (GES_EXTRACTABLE (self));
+
+  if (!asset) {
+    GST_WARNING_OBJECT (self, "No asset set?");
+
+    return FALSE;
+  }
+
+  for (tmp = (GList *)
+      ges_uri_clip_asset_get_stream_assets (GES_URI_CLIP_ASSET (asset)); tmp;
+      tmp = tmp->next) {
+    if (ges_track_element_asset_get_natural_framerate (GES_TRACK_ELEMENT_ASSET
+            (tmp->data), framerate_n, framerate_d))
+      return TRUE;
+  }
+
+  return FALSE;
 }
 
 static void
@@ -190,7 +216,8 @@ ges_uri_clip_class_init (GESUriClipClass * klass)
           GES_TYPE_TRACK_TYPE, GES_TRACK_TYPE_UNKNOWN,
           G_PARAM_READWRITE | G_PARAM_CONSTRUCT));
 
-  element_class->set_max_duration = uri_clip_set_max_duration;
+  element_class->set_max_duration_full = uri_clip_set_max_duration_full;
+  element_class->get_natural_framerate = _get_natural_framerate;
 
   timobj_class->create_track_elements = ges_uri_clip_create_track_elements;
   timobj_class->create_track_element = ges_uri_clip_create_track_element;
@@ -412,16 +439,35 @@ ges_uri_clip_set_mute (GESUriClip * self, gboolean mute)
 }
 
 gboolean
-uri_clip_set_max_duration (GESTimelineElement * element,
-    GstClockTime maxduration)
+uri_clip_set_max_duration_full (GESTimelineElement * element,
+    GstClockTime maxduration, GESFrameNumber fmaxduration)
 {
-  if (_DURATION (element) == GST_CLOCK_TIME_NONE || _DURATION (element) == 0)
-    /* If we don't have a valid duration, use the max duration */
-    _set_duration0 (element, maxduration - _INPOINT (element));
+  /* If we don't have a valid duration, use the max duration */
+  if (!GST_CLOCK_TIME_IS_VALID (_DURATION (element))
+      || _DURATION (element) == 0) {
+    if (GES_FRAME_IS_VALID (fmaxduration)) {
+      guint64 finpoint = ges_timeline_element_get_finpoint (element);
+
+      if (!GES_FRAME_IS_VALID (finpoint)) {
+        gint fps_n, fps_d;
+        GstVideoTimeCodeFlags flags;
+
+        ges_timeline_get_timecodes_config (element->timeline, &fps_n, &fps_d,
+            &flags);
+        finpoint =
+            ges_timestamp_get_frame (_INPOINT (element), fps_n, fps_d, flags,
+            FALSE);
+      }
+
+      ges_timeline_element_set_fduration (element, fmaxduration - finpoint);
+    } else {
+      _set_duration0 (element, maxduration - _INPOINT (element));
+    }
+  }
 
   return
-      GES_TIMELINE_ELEMENT_CLASS (parent_class)->set_max_duration (element,
-      maxduration);
+      GES_TIMELINE_ELEMENT_CLASS (parent_class)->set_max_duration_full (element,
+      maxduration, fmaxduration);
 }
 
 /**

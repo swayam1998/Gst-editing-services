@@ -37,6 +37,7 @@
 #include "ges-internal.h"
 #include "ges-extractable.h"
 #include "ges-track-element.h"
+#include "ges-track-element-asset.h"
 #include "ges-clip.h"
 #include "ges-meta-container.h"
 
@@ -82,11 +83,12 @@ G_DEFINE_ABSTRACT_TYPE_WITH_PRIVATE (GESTrackElement, ges_track_element,
 static GstElement *ges_track_element_create_gnl_object_func (GESTrackElement *
     object);
 
-static gboolean _set_start (GESTimelineElement * element, GstClockTime start);
-static gboolean _set_inpoint (GESTimelineElement * element,
-    GstClockTime inpoint);
-static gboolean _set_duration (GESTimelineElement * element,
-    GstClockTime duration);
+static gboolean _set_start_full (GESTimelineElement * element,
+    GstClockTime start, GESFrameNumber fstart);
+static gboolean _set_inpoint_full (GESTimelineElement * element,
+    GstClockTime inpoint, GESFrameNumber finpoint);
+static gboolean _set_duration_full (GESTimelineElement * element,
+    GstClockTime duration, GESFrameNumber fduration);
 static gboolean _set_priority (GESTimelineElement * element, guint32 priority);
 GESTrackType _get_track_types (GESTimelineElement * object);
 
@@ -263,7 +265,6 @@ ges_track_element_class_init (GESTrackElementClass * klass)
   object_class->dispose = ges_track_element_dispose;
   object_class->constructed = ges_track_element_constructed;
 
-
   /**
    * GESTrackElement:active:
    *
@@ -313,9 +314,9 @@ ges_track_element_class_init (GESTrackElementClass * klass)
       G_SIGNAL_RUN_FIRST, 0, NULL, NULL, g_cclosure_marshal_generic,
       G_TYPE_NONE, 1, GST_TYPE_CONTROL_BINDING);
 
-  element_class->set_start = _set_start;
-  element_class->set_duration = _set_duration;
-  element_class->set_inpoint = _set_inpoint;
+  element_class->set_start_full = _set_start_full;
+  element_class->set_duration_full = _set_duration_full;
+  element_class->set_inpoint_full = _set_inpoint_full;
   element_class->set_priority = _set_priority;
   element_class->get_track_types = _get_track_types;
   element_class->deep_copy = ges_track_element_copy_properties;
@@ -473,7 +474,8 @@ _update_control_bindings (GESTimelineElement * element, GstClockTime inpoint,
 }
 
 static gboolean
-_set_start (GESTimelineElement * element, GstClockTime start)
+_set_start_full (GESTimelineElement * element, GstClockTime start,
+    GESFrameNumber fstart)
 {
   GESTrackElement *object = GES_TRACK_ELEMENT (element);
 
@@ -488,7 +490,8 @@ _set_start (GESTimelineElement * element, GstClockTime start)
 }
 
 static gboolean
-_set_inpoint (GESTimelineElement * element, GstClockTime inpoint)
+_set_inpoint_full (GESTimelineElement * element, GstClockTime inpoint,
+    GESFrameNumber finpoint)
 {
   GESTrackElement *object = GES_TRACK_ELEMENT (element);
 
@@ -504,16 +507,19 @@ _set_inpoint (GESTimelineElement * element, GstClockTime inpoint)
 }
 
 static gboolean
-_set_duration (GESTimelineElement * element, GstClockTime duration)
+_set_duration_full (GESTimelineElement * element, GstClockTime duration,
+    GESFrameNumber fduration)
 {
   GESTrackElement *object = GES_TRACK_ELEMENT (element);
   GESTrackElementPrivate *priv = object->priv;
 
   g_return_val_if_fail (object->priv->nleobject, FALSE);
 
-  if (GST_CLOCK_TIME_IS_VALID (_MAXDURATION (element)) &&
-      duration > _INPOINT (object) + _MAXDURATION (element))
+  if (GST_CLOCK_TIME_IS_VALID (_MAXDURATION (element))
+      && duration > _INPOINT (object) + _MAXDURATION (element)) {
+
     duration = _MAXDURATION (element) - _INPOINT (object);
+  }
 
   if (G_UNLIKELY (duration == _DURATION (object)))
     return -1;
@@ -807,6 +813,7 @@ gboolean
 ges_track_element_set_track (GESTrackElement * object, GESTrack * track)
 {
   gboolean ret = TRUE;
+  GESTimelineElement *parent = GES_TIMELINE_ELEMENT_PARENT (object);
 
   g_return_val_if_fail (object->priv->nleobject, FALSE);
 
@@ -819,6 +826,27 @@ ges_track_element_set_track (GESTrackElement * object, GESTrack * track)
 
     g_object_set (object->priv->nleobject,
         "caps", ges_track_get_caps (object->priv->track), NULL);
+  }
+
+
+  if (parent) {
+    guint64 fstart = _FSTART (parent),
+        finpoint = _FINPOINT (parent),
+        fduration = _FDURATION (parent), fmaxduration = _FMAXDURATION (parent);
+
+    if (GES_FRAME_IS_VALID (fstart))
+      _set_fstart0 (object, fstart);
+
+    if (GES_FRAME_IS_VALID (finpoint))
+      _set_finpoint0 (object, finpoint);
+
+    if (GES_FRAME_IS_VALID (fduration))
+      _set_fduration0 (object, fduration);
+
+    if (GES_FRAME_IS_VALID (fmaxduration)
+        && GST_CLOCK_TIME_IS_VALID (GES_TIMELINE_ELEMENT_MAX_DURATION (parent)))
+      ges_timeline_element_set_fmax_duration (GES_TIMELINE_ELEMENT (object),
+          fmaxduration);
   }
 
   g_object_notify_by_pspec (G_OBJECT (object), properties[PROP_TRACK]);

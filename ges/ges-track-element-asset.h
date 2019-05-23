@@ -35,6 +35,7 @@ G_BEGIN_DECLS
 #define GES_TRACK_ELEMENT_ASSET_GET_CLASS(obj) (G_TYPE_INSTANCE_GET_CLASS ((obj), GES_TYPE_TRACK_ELEMENT_ASSET, GESTrackElementAssetClass))
 
 typedef struct _GESTrackElementAssetPrivate GESTrackElementAssetPrivate;
+typedef struct _GESTrackElementAssetClass GESTrackElementAssetClass;
 
 GES_API
 GType ges_track_element_asset_get_type (void);
@@ -54,13 +55,17 @@ struct _GESTrackElementAssetClass
 {
   GESAssetClass parent_class;
 
-  gpointer _ges_reserved[GES_PADDING];
+  gboolean (*get_natural_framerate)        (GESTrackElementAsset *self, gint *framerate_n, gint *framerate_d);
+
+  gpointer _ges_reserved[GES_PADDING - 1];
 };
 
 GES_API
 const GESTrackType ges_track_element_asset_get_track_type (GESTrackElementAsset *asset);
 GES_API
 void ges_track_element_asset_set_track_type               (GESTrackElementAsset * asset, GESTrackType type);
+GES_API
+gboolean ges_track_element_asset_get_natural_framerate    (GESTrackElementAsset *self, gint *framerate_n, gint *framerate_d);
 
 G_END_DECLS
 #endif /* _GES_TRACK_ELEMENT_ASSET */

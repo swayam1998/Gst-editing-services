@@ -698,6 +698,33 @@ _extract (GESAsset * asset, GError ** error)
   return GES_EXTRACTABLE (trackelement);
 }
 
+static gboolean
+_get_natural_framerate (GESTrackElementAsset * self, gint * framerate_n,
+    gint * framerate_d)
+{
+  GESUriSourceAssetPrivate *priv = GES_URI_SOURCE_ASSET (self)->priv;
+
+  if (!GST_IS_DISCOVERER_VIDEO_INFO (priv->sinfo))
+    return FALSE;
+
+  *framerate_d =
+      gst_discoverer_video_info_get_framerate_denom (GST_DISCOVERER_VIDEO_INFO
+      (priv->sinfo));
+  *framerate_n =
+      gst_discoverer_video_info_get_framerate_num (GST_DISCOVERER_VIDEO_INFO
+      (priv->sinfo));
+
+  if ((*framerate_n == 0 && *framerate_d == 1) || *framerate_d == 0
+      || *framerate_d == G_MAXINT) {
+    GST_INFO_OBJECT (self, "No framerate information about the file.");
+
+    *framerate_d = 0;
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
 static void
 ges_uri_source_asset_dispose (GObject * object)
 {
@@ -717,6 +744,8 @@ ges_uri_source_asset_class_init (GESUriSourceAssetClass * klass)
   object_class->dispose = ges_uri_source_asset_dispose;
 
   GES_ASSET_CLASS (klass)->extract = _extract;
+  GES_TRACK_ELEMENT_ASSET_CLASS (klass)->get_natural_framerate =
+      _get_natural_framerate;
 }
 
 static void

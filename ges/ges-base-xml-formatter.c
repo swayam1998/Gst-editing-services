@@ -556,6 +556,19 @@ _set_child_property (GQuark field_id, const GValue * value,
 gboolean
 set_property_foreach (GQuark field_id, const GValue * value, GObject * object)
 {
+  gint i;
+  static const char *frame_fields[] =
+      { "finpoint", "fstart", "fduration", "fmax-duration" };
+
+  if (GES_IS_TIMELINE_ELEMENT (object)) {
+    for (i = 0; i < G_N_ELEMENTS (frame_fields); i++) {
+      if (g_quark_from_string (frame_fields[i]) == field_id) {
+        if (!GES_FRAME_IS_VALID (g_value_get_int64 (value)))
+          return TRUE;
+      }
+    }
+  }
+
   g_object_set_property (object, g_quark_to_string (field_id), value);
   return TRUE;
 }

@@ -53,6 +53,7 @@ typedef struct
   gchar *sanitized_timeline;
   const gchar *video_track_caps;
   const gchar *audio_track_caps;
+  const gchar *timecodes_config;
 } ParsedOptions;
 
 struct _GESLauncherPrivate
@@ -90,6 +91,46 @@ _parse_track_type (const gchar * option_name, const gchar * value,
     return FALSE;
 
   return TRUE;
+}
+
+static gboolean
+_set_timecodes_config (GESLauncher * self, const gchar * value)
+{
+  gchar **config;
+  GValue v = { 0 };
+  gboolean res = FALSE;
+  GstVideoTimeCodeFlags flags = GST_VIDEO_TIME_CODE_FLAGS_NONE;
+
+  if (!value) {
+    return TRUE;
+  }
+
+  config = g_strsplit (value, ":", -1);
+  g_value_init (&v, GST_TYPE_FRACTION);
+  GST_INFO ("Deserializing %s %s", config[0], g_type_name (GST_TYPE_FRACTION));
+  if (!gst_value_deserialize (&v, config[0])) {
+    GST_ERROR ("Could not deserialize %s as a fraction", config[0]);
+
+    goto done;
+  }
+
+  if (config[1]
+      && !get_flags_from_string (GST_TYPE_VIDEO_TIME_CODE_FLAGS, config[1],
+          &flags)) {
+    GST_ERROR ("Invalid flags: %s", config[1]);
+
+    goto done;
+  }
+
+  res = ges_timeline_set_timecodes_config (self->priv->timeline,
+      gst_value_get_fraction_numerator (&v),
+      gst_value_get_fraction_denominator (&v), flags);
+
+done:
+  g_strfreev (config);
+  g_value_reset (&v);
+
+  return res;
 }
 
 static gboolean
@@ -226,6 +267,14 @@ _project_loaded_cb (GESProject * project, GESTimeline * timeline,
 }
 
 static void
+_project_loading_cb (GESProject * project, GESTimeline * timeline,
+    GESLauncher * self)
+{
+  self->priv->timeline = timeline;
+  _set_timecodes_config (self, self->priv->parsed_options.timecodes_config);
+}
+
+static void
 _error_loading_asset_cb (GESProject * project, GError * error,
     const gchar * failed_id, GType extractable_type, GESLauncher * self)
 {
@@ -248,6 +297,8 @@ _create_timeline (GESLauncher * self, const gchar * serialized_timeline,
   } else if (scenario == NULL) {
     GST_INFO ("serialized timeline is %s", serialized_timeline);
     project = ges_project_new (serialized_timeline);
+    g_signal_connect (project, "loading",
+        G_CALLBACK (_project_loading_cb), self);
   } else {
     project = ges_project_new (NULL);
   }
@@ -263,6 +314,13 @@ _create_timeline (GESLauncher * self, const gchar * serialized_timeline,
     g_printerr ("\nERROR: Could not create timeline because: %s\n\n",
         error->message);
     g_error_free (error);
+    return FALSE;
+  }
+
+  if (!_set_timecodes_config (self,
+          self->priv->parsed_options.timecodes_config)) {
+    g_printerr ("Could not parse timecodes config: %s",
+        self->priv->parsed_options.timecodes_config);
     return FALSE;
   }
 
@@ -709,6 +767,9 @@ _local_command_line (GApplication * application, gchar ** arguments[],
         "Specify the track restriction caps of the video track.",},
     {"audio-caps", 0, 0, G_OPTION_ARG_STRING, &opts->audio_track_caps,
         "Specify the track restriction caps of the audio track.",},
+    {"timecodes-config", 0, 0, G_OPTION_ARG_STRING, &opts->timecodes_config,
+        "Specify the timeline timecodes config in the form of `30/1[:drop]`"
+          "<timecodes-config>"},
 #ifdef HAVE_GST_VALIDATE
     {"set-scenario", 0, 0, G_OPTION_ARG_STRING, &opts->scenario,
           "ges-launch-1.0 exposes gst-validate functionalities, such as scenarios."
