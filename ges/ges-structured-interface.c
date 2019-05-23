@@ -22,6 +22,8 @@
 #endif
 
 #include "ges-structured-interface.h"
+#include "ges-internal.h"
+#include "ges-time-code.h"
 
 #include <string.h>
 
@@ -30,7 +32,7 @@
 #define LAST_CHILD_QDATA g_quark_from_string("ges-structured-last-child")
 
 static gboolean
-_get_clocktime (GstStructure * structure, const gchar * name, gpointer var)
+_get_time (GstStructure * structure, const gchar * name, gpointer var)
 {
   gboolean found = FALSE;
   GstClockTime *val = (GstClockTime *) var;
@@ -73,7 +75,7 @@ _get_clocktime (GstStructure * structure, const gchar * name, gpointer var)
   gboolean found = FALSE; \
 \
   if (type == GST_TYPE_CLOCK_TIME) {\
-    found = _get_clocktime(structure,name,var);\
+    found = _get_time(structure,name,var);\
   }\
   else { \
     found = gst_structure_get (structure, name, type, var, NULL); \
@@ -95,11 +97,11 @@ _get_clocktime (GstStructure * structure, const gchar * name, gpointer var)
 } G_STMT_END
 
 #define TRY_GET(name,type,var,def) G_STMT_START {\
-  if (type == GST_TYPE_CLOCK_TIME) {\
-    if (!_get_clocktime(structure,name,var))\
-      *var = def; \
-  } else if  (!gst_structure_get (structure, name, type, var, NULL)) {\
-    *var = def; \
+  if ((type) == GST_TYPE_CLOCK_TIME) {\
+    if (!_get_time(structure,name,var))\
+      *(var) = (def); \
+  } else if  (!gst_structure_get (structure, (name), (type), (var), NULL)) {\
+    *(var) = (def); \
   } \
 } G_STMT_END
 
@@ -323,6 +325,14 @@ ensure_uri (gchar * location)
     return gst_filename_to_uri (location, NULL);
 }
 
+#define CHECK_AND_SET_TIME(val,setter,CHECKER)\
+     if (CHECKER(val)) { \
+      if (!setter (GES_TIMELINE_ELEMENT (clip), val)) { \
+        res = FALSE;\
+        goto beach;\
+      }\
+     }
+
 gboolean
 _ges_add_clip_from_struct (GESTimeline * timeline, GstStructure * structure,
     GError ** error)
@@ -338,14 +348,16 @@ _ges_add_clip_from_struct (GESTimeline * timeline, GstStructure * structure,
   gchar *check_asset_id = NULL;
   const gchar *type_string;
   GType type;
-  gboolean res = FALSE;
+  gboolean res = FALSE, add_in_frames;
 
   GstClockTime duration = 1 * GST_SECOND, inpoint = 0, start =
       GST_CLOCK_TIME_NONE;
+  GESFrameNumber fstart, finpoint, fduration;
 
   const gchar *valid_fields[] =
       { "asset-id", "pattern", "name", "layer-priority", "layer", "type",
-    "start", "inpoint", "duration", "text", NULL
+    "start", "inpoint", "duration", "fstart", "finpoint", "fduration",
+    "text", NULL
   };
 
   FieldsError fields_error = { valid_fields, NULL };
@@ -363,8 +375,11 @@ _ges_add_clip_from_struct (GESTimeline * timeline, GstStructure * structure,
     TRY_GET ("layer", G_TYPE_INT, &layer_priority, -1);
   TRY_GET_STRING ("type", &type_string, "GESUriClip");
   TRY_GET ("start", GST_TYPE_CLOCK_TIME, &start, GST_CLOCK_TIME_NONE);
-  TRY_GET ("inpoint", GST_TYPE_CLOCK_TIME, &inpoint, 0);
+  TRY_GET ("fstart", GST_TYPE_CLOCK_TIME, &fstart, GES_FRAME_NONE);
+  TRY_GET ("inpoint", GST_TYPE_CLOCK_TIME, &inpoint, GST_CLOCK_TIME_NONE);
+  TRY_GET ("finpoint", GST_TYPE_CLOCK_TIME, &finpoint, GES_FRAME_NONE);
   TRY_GET ("duration", GST_TYPE_CLOCK_TIME, &duration, GST_CLOCK_TIME_NONE);
+  TRY_GET ("fduration", GST_TYPE_CLOCK_TIME, &fduration, GES_FRAME_NONE);
 
   if (!(type = g_type_from_name (type_string))) {
     *error = g_error_new (GES_ERROR, 0, "This type doesn't exist : %s",
@@ -407,11 +422,40 @@ _ges_add_clip_from_struct (GESTimeline * timeline, GstStructure * structure,
     goto beach;
   }
 
-  clip = ges_layer_add_asset (layer, asset, start, inpoint, duration,
-      GES_TRACK_TYPE_UNKNOWN);
+  add_in_frames = GES_FRAME_IS_VALID (fstart) || GES_FRAME_IS_VALID (finpoint)
+      || GES_FRAME_IS_VALID (fduration);
+  if (add_in_frames) {
+    if (!GES_FRAME_IS_VALID (finpoint))
+      finpoint = 0;
+
+    clip = ges_layer_add_fasset (layer, asset, fstart, finpoint, fduration,
+        GES_TRACK_TYPE_UNKNOWN);
+  } else {
+    if (!GST_CLOCK_TIME_IS_VALID (inpoint))
+      inpoint = 0;
+
+    clip = ges_layer_add_asset (layer, asset, start, inpoint, duration,
+        GES_TRACK_TYPE_UNKNOWN);
+  }
 
   if (clip) {
     res = TRUE;
+
+    if (!add_in_frames) {
+      CHECK_AND_SET_TIME (fstart, ges_timeline_element_set_fstart,
+          GES_FRAME_IS_VALID);
+      CHECK_AND_SET_TIME (finpoint, ges_timeline_element_set_finpoint,
+          GES_FRAME_IS_VALID);
+      CHECK_AND_SET_TIME (fduration, ges_timeline_element_set_fduration,
+          GES_FRAME_IS_VALID);
+    } else {
+      CHECK_AND_SET_TIME (start, ges_timeline_element_set_start,
+          GST_CLOCK_TIME_IS_VALID);
+      CHECK_AND_SET_TIME (inpoint, ges_timeline_element_set_inpoint,
+          GST_CLOCK_TIME_IS_VALID);
+      CHECK_AND_SET_TIME (duration, ges_timeline_element_set_duration,
+          GST_CLOCK_TIME_IS_VALID);
+    }
 
     if (GES_IS_TEST_CLIP (clip)) {
       if (pattern) {

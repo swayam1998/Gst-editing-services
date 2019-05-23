@@ -60,18 +60,18 @@ _check_command_help (int argc, gchar ** argv)
     exit (0);
   }
 
-/*     else
- *       page = g_strconcat ("ges-launch-1.0", "-", argv[2], NULL);
- *
- *     if (page) {
- *       execlp ("man", "man", page, NULL);
- *       g_free (page);
- *     }
- *
- *     an error is raised by execlp it will be displayed in the terminal
- *     exit (0);
- *   }
- */
+  /*     else
+   *       page = g_strconcat ("ges-launch-1.0", "-", argv[2], NULL);
+   *
+   *     if (page) {
+   *       execlp ("man", "man", page, NULL);
+   *       g_free (page);
+   *     }
+   *
+   *     an error is raised by execlp it will be displayed in the terminal
+   *     exit (0);
+   *   }
+   */
 }
 
 int

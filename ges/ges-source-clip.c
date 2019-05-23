@@ -47,7 +47,8 @@ enum
 G_DEFINE_TYPE_WITH_PRIVATE (GESSourceClip, ges_source_clip, GES_TYPE_CLIP);
 
 static gboolean
-_set_start (GESTimelineElement * element, GstClockTime start)
+_set_start_full (GESTimelineElement * element, GstClockTime start,
+    GESFrameNumber fstart)
 {
   GESTimelineElement *toplevel =
       ges_timeline_element_get_toplevel_parent (element);
@@ -56,19 +57,24 @@ _set_start (GESTimelineElement * element, GstClockTime start)
   if (element->timeline
       && !ELEMENT_FLAG_IS_SET (element, GES_TIMELINE_ELEMENT_SET_SIMPLE)
       && !ELEMENT_FLAG_IS_SET (toplevel, GES_TIMELINE_ELEMENT_SET_SIMPLE)) {
-    if (!ges_timeline_move_object_simple (element->timeline, element, NULL,
-            GES_EDGE_NONE, start))
+    GESFrameNumber fdiff = GES_FRAME_IS_VALID (fstart) ?
+        _FSTART (element) - fstart : GES_FRAME_NONE;
+
+    if (!timeline_tree_move (timeline_get_tree (element->timeline), element,
+            0, GST_CLOCK_DIFF (start, element->start), GES_EDGE_START,
+            ges_timeline_get_snapping_distance (element->timeline), fdiff))
       return FALSE;
     return -1;
   }
 
   return
-      GES_TIMELINE_ELEMENT_CLASS (ges_source_clip_parent_class)->set_start
-      (element, start);
+      GES_TIMELINE_ELEMENT_CLASS (ges_source_clip_parent_class)->set_start_full
+      (element, start, fstart);
 }
 
 static gboolean
-_set_duration (GESTimelineElement * element, GstClockTime duration)
+_set_duration_full (GESTimelineElement * element, GstClockTime duration,
+    GESFrameNumber fduration)
 {
   GESTimelineElement *toplevel =
       ges_timeline_element_get_toplevel_parent (element);
@@ -77,14 +83,31 @@ _set_duration (GESTimelineElement * element, GstClockTime duration)
   if (element->timeline
       && !ELEMENT_FLAG_IS_SET (element, GES_TIMELINE_ELEMENT_SET_SIMPLE)
       && !ELEMENT_FLAG_IS_SET (toplevel, GES_TIMELINE_ELEMENT_SET_SIMPLE)) {
-    return !timeline_trim_object (element->timeline, element,
-        GES_TIMELINE_ELEMENT_LAYER_PRIORITY (element), NULL, GES_EDGE_END,
-        element->start + duration);
+    GESFrameNumber fdiff = GES_FRAME_NONE;
+
+    if (GES_FRAME_IS_VALID (fduration)) {
+      ELEMENT_SET_FLAG (element, GES_TIMELINE_ELEMENT_SET_SIMPLE);
+      if (!ges_timeline_element_reset_framerate_on_edge (element, GES_EDGE_NONE,
+              TRUE)) {
+        ELEMENT_UNSET_FLAG (element, GES_TIMELINE_ELEMENT_SET_SIMPLE);
+        return FALSE;
+      }
+      ELEMENT_UNSET_FLAG (element, GES_TIMELINE_ELEMENT_SET_SIMPLE);
+
+      fdiff = _FDURATION (element) - fduration;
+    }
+
+    if (!timeline_tree_trim (timeline_get_tree (element->timeline), element, 0,
+            GST_CLOCK_DIFF (duration, element->duration), GES_EDGE_END,
+            ges_timeline_get_snapping_distance (element->timeline), fdiff))
+      return FALSE;
+    else
+      return -1;
   }
 
   return
-      GES_TIMELINE_ELEMENT_CLASS (ges_source_clip_parent_class)->set_duration
-      (element, duration);
+      GES_TIMELINE_ELEMENT_CLASS
+      (ges_source_clip_parent_class)->set_duration_full (element, duration, fduration);
 }
 
 static void
@@ -123,8 +146,8 @@ ges_source_clip_class_init (GESSourceClipClass * klass)
   object_class->set_property = ges_source_clip_set_property;
   object_class->finalize = ges_source_clip_finalize;
 
-  element_class->set_start = _set_start;
-  element_class->set_duration = _set_duration;
+  element_class->set_start_full = _set_start_full;
+  element_class->set_duration_full = _set_duration_full;
 }
 
 static void

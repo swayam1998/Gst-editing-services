@@ -76,6 +76,15 @@ _set_property (GObject * object, guint property_id,
   }
 }
 
+static gboolean
+_get_natural_framerate (GESTrackElementAsset * self, gint * framerate_n,
+    gint * framerate_d)
+{
+  GST_INFO_OBJECT (self, "No natural framerate");
+
+  return FALSE;
+}
+
 static void
 ges_track_element_asset_class_init (GESTrackElementAssetClass * klass)
 {
@@ -83,6 +92,7 @@ ges_track_element_asset_class_init (GESTrackElementAssetClass * klass)
 
   object_class->get_property = _get_property;
   object_class->set_property = _set_property;
+  klass->get_natural_framerate = _get_natural_framerate;
 
   /**
    * GESClip:track-type:
@@ -142,4 +152,23 @@ ges_track_element_asset_get_track_type (GESTrackElementAsset * asset)
       GES_TRACK_TYPE_UNKNOWN);
 
   return asset->priv->type;
+}
+
+/**
+ * DOCUMENT ME
+ */
+gboolean
+ges_track_element_asset_get_natural_framerate (GESTrackElementAsset * self,
+    gint * framerate_n, gint * framerate_d)
+{
+  GESTrackElementAssetClass *klass;
+
+  g_return_val_if_fail (GES_IS_TRACK_ELEMENT_ASSET (self), FALSE);
+  g_return_val_if_fail (framerate_n && framerate_d, FALSE);
+
+  klass = GES_TRACK_ELEMENT_ASSET_GET_CLASS (self);
+
+  *framerate_n = 0;
+  *framerate_d = -1;
+  return klass->get_natural_framerate (self, framerate_n, framerate_d);
 }

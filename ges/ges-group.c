@@ -265,7 +265,7 @@ _trim (GESTimelineElement * group, GstClockTime start)
 
   return timeline_tree_trim (timeline_get_tree (timeline), group,
       0, GST_CLOCK_DIFF (start, _START (group)), GES_EDGE_START,
-      ges_timeline_get_snapping_distance (timeline));
+      ges_timeline_get_snapping_distance (timeline), GES_FRAME_NONE);
 }
 
 static gboolean
@@ -325,7 +325,8 @@ _set_priority (GESTimelineElement * element, guint32 priority)
 }
 
 static gboolean
-_set_start (GESTimelineElement * element, GstClockTime start)
+_set_start_full (GESTimelineElement * element, GstClockTime start,
+    GESFrameNumber fstart)
 {
   GList *tmp;
   gint64 diff = start - _START (element);
@@ -337,8 +338,8 @@ _set_start (GESTimelineElement * element, GstClockTime start)
   gst_object_unref (toplevel);
   if (GES_GROUP (element)->priv->setting_value == TRUE)
     /* Let GESContainer update itself */
-    return GES_TIMELINE_ELEMENT_CLASS (parent_class)->set_start (element,
-        start);
+    return GES_TIMELINE_ELEMENT_CLASS (parent_class)->set_start_full (element,
+        start, fstart);
 
   if (ELEMENT_FLAG_IS_SET (element, GES_TIMELINE_ELEMENT_SET_SIMPLE) ||
       ELEMENT_FLAG_IS_SET (toplevel, GES_TIMELINE_ELEMENT_SET_SIMPLE)) {
@@ -359,13 +360,15 @@ _set_start (GESTimelineElement * element, GstClockTime start)
 }
 
 static gboolean
-_set_inpoint (GESTimelineElement * element, GstClockTime inpoint)
+_set_inpoint_full (GESTimelineElement * element, GstClockTime inpoint,
+    GESFrameNumber finpoint)
 {
   return FALSE;
 }
 
 static gboolean
-_set_duration (GESTimelineElement * element, GstClockTime duration)
+_set_duration_full (GESTimelineElement * element, GstClockTime duration,
+    GESFrameNumber fduration)
 {
   GList *tmp;
   GstClockTime last_child_end = 0, new_end;
@@ -374,8 +377,9 @@ _set_duration (GESTimelineElement * element, GstClockTime duration)
 
   if (priv->setting_value == TRUE)
     /* Let GESContainer update itself */
-    return GES_TIMELINE_ELEMENT_CLASS (parent_class)->set_duration (element,
-        duration);
+    return
+        GES_TIMELINE_ELEMENT_CLASS (parent_class)->set_duration_full (element,
+        duration, fduration);
 
   if (element->timeline
       && !timeline_tree_can_move_element (timeline_get_tree (element->timeline),
@@ -707,9 +711,9 @@ ges_group_class_init (GESGroupClass * klass)
   object_class->set_property = ges_group_set_property;
 
   element_class->trim = _trim;
-  element_class->set_duration = _set_duration;
-  element_class->set_inpoint = _set_inpoint;
-  element_class->set_start = _set_start;
+  element_class->set_duration_full = _set_duration_full;
+  element_class->set_inpoint_full = _set_inpoint_full;
+  element_class->set_start_full = _set_start_full;
   element_class->set_priority = _set_priority;
   element_class->paste = _paste;
 

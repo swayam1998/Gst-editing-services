@@ -114,6 +114,14 @@ GESClip * ges_layer_add_asset   (GESLayer *layer,
                                                        GESTrackType track_types);
 
 GES_API
+GESClip * ges_layer_add_fasset   (GESLayer *layer,
+                                  GESAsset *asset,
+                                  guint64 start_frame,
+                                  guint64 inpoint_frame,
+                                  guint64 duration_frame,
+                                  GESTrackType track_types);
+
+GES_API
 gboolean ges_layer_remove_clip (GESLayer * layer,
 					   GESClip * clip);
 
@@ -141,6 +149,8 @@ GES_API
 GList*   ges_layer_get_clips   (GESLayer * layer);
 GES_API
 GstClockTime ges_layer_get_duration (GESLayer *layer);
+GES_API
+GstClockTime ges_layer_get_fduration (GESLayer * layer);
 
 G_END_DECLS
 

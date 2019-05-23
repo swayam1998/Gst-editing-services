@@ -61,6 +61,7 @@ ges_sources = files([
     'ges-validate.c',
     'ges-structured-interface.c',
     'ges-structure-parser.c',
+    'ges-time-code.c',
     'gstframepositioner.c'
 ])
 

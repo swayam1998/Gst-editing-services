@@ -236,6 +236,7 @@ class TestGroup(common.GESSimpleTimelineTest):
         self.assertTrue(clip2.edit(
             self.timeline.get_layers(), 0,
             GES.EditMode.EDIT_NORMAL, GES.Edge.EDGE_NONE, 25))
+        Gst.error("---------------------------")
         clip2.props.start = 25
 
         clips = self.layer.get_clips()

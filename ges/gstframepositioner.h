@@ -23,6 +23,7 @@
 #include <gst/base/gstbasetransform.h>
 #include <ges/ges-track-element.h>
 #include <ges/ges-track.h>
+#include <ges/ges-timeline.h>
 
 G_BEGIN_DECLS
 
@@ -44,6 +45,7 @@ struct _GstFramePositioner
 
   GESTrackElement *track_source;
   GESTrack *current_track;
+  GESTimeline *current_timeline;
 
   gboolean scale_in_compositor;
   gdouble alpha;

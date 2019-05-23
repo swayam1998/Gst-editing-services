@@ -24,6 +24,7 @@
 #include <glib-object.h>
 #include <gst/gst.h>
 #include <gst/pbutils/gstdiscoverer.h>
+#include <gst/video/video.h>
 #include <ges/ges-types.h>
 
 G_BEGIN_DECLS
@@ -163,6 +164,11 @@ GESTimelineElement * ges_timeline_paste_element (GESTimeline * timeline,
   GESTimelineElement * element, GstClockTime position, gint layer_priority);
 GES_API
 gboolean ges_timeline_move_layer (GESTimeline *timeline, GESLayer *layer, guint new_layer_priority);
+
+GES_API
+gboolean ges_timeline_set_timecodes_config (GESTimeline * timeline, gint framerate_n, gint framerate_d, GstVideoTimeCodeFlags flags);
+GES_API
+gboolean ges_timeline_get_timecodes_config (GESTimeline * timeline, gint *framerate_n, gint *framerate_d, GstVideoTimeCodeFlags *timecodes_flags);
 
 G_END_DECLS
 

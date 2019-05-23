@@ -203,15 +203,36 @@ class GESSimpleTimelineTest(GESTest):
 
         return clip
 
-    def assertTimelineTopology(self, topology, groups=[]):
+    def assertTimelineTopology(self, topology, groups=[], in_frames=False, check_track_elements=True):
+        def has_inpoints(topology):
+            for l in topology:
+                for c in l:
+                    return len(c) == 4
+            return False
+
+        with_inpoints = has_inpoints(topology)
         res = []
         for layer in self.timeline.get_layers():
             layer_timings = []
             for clip in layer.get_clips():
-                layer_timings.append(
-                    (type(clip), clip.props.start, clip.props.duration))
+                if in_frames:
+                    vals = (type(clip), clip.props.fstart, clip.props.fin_point, clip.props.fduration)
+                else:
+                    vals = (type(clip), clip.props.start, clip.props.in_point, clip.props.duration)
+
+                if with_inpoints:
+                    layer_timings.append(vals)
+                else:
+                    layer_timings.append((vals[0], vals[1], vals[3]))
+
+                if check_track_elements:
+                    for child in clip.get_children(False):
+                        for prop in ['start', 'in_point', 'duration']:
+                            self.assertEqual(child.get_property(prop), clip.get_property(prop), "%s doesn't match - %s (%s)" % (prop, child, clip))
+                            self.assertEqual(child.get_property('f' + prop), clip.get_property('f' + prop), "f%s doesn't match - %s (%s)" % (prop, child, clip))
 
             res.append(layer_timings)
+
         if topology != res:
             Gst.error(self.timeline_as_str())
             self.assertEqual(topology, res)

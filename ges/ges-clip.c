@@ -131,13 +131,15 @@ _child_priority_changed_cb (GESTimelineElement * child,
  *****************************************************/
 
 static gboolean
-_set_start (GESTimelineElement * element, GstClockTime start)
+_set_start_full (GESTimelineElement * element, GstClockTime start,
+    GESFrameNumber fstart)
 {
   GList *tmp;
   GESContainer *container = GES_CONTAINER (element);
 
-  GST_DEBUG_OBJECT (element, "Setting children start, (initiated_move: %"
-      GST_PTR_FORMAT ")", container->initiated_move);
+  GST_DEBUG_OBJECT (element, "Setting children start %" GST_TIME_FORMAT
+      FRAMES_FORMAT " (initiated_move: %" GST_PTR_FORMAT ")",
+      GST_TIME_ARGS (start), FRAMES_ARGS (fstart), container->initiated_move);
 
   element->start = start;
   g_object_notify (G_OBJECT (element), "start");
@@ -145,7 +147,10 @@ _set_start (GESTimelineElement * element, GstClockTime start)
   for (tmp = container->children; tmp; tmp = g_list_next (tmp)) {
     GESTimelineElement *child = (GESTimelineElement *) tmp->data;
 
-    _set_start0 (GES_TIMELINE_ELEMENT (child), start);
+    if (GES_FRAME_IS_VALID (fstart))
+      ges_timeline_element_set_fstart (GES_TIMELINE_ELEMENT (child), fstart);
+    else
+      ges_timeline_element_set_start (GES_TIMELINE_ELEMENT (child), start);
   }
   container->children_control_mode = GES_CHILDREN_UPDATE;
 
@@ -153,7 +158,8 @@ _set_start (GESTimelineElement * element, GstClockTime start)
 }
 
 static gboolean
-_set_inpoint (GESTimelineElement * element, GstClockTime inpoint)
+_set_inpoint_full (GESTimelineElement * element, GstClockTime inpoint,
+    GESFrameNumber finpoint)
 {
   GList *tmp;
   GESContainer *container = GES_CONTAINER (element);
@@ -163,7 +169,12 @@ _set_inpoint (GESTimelineElement * element, GstClockTime inpoint)
     GESTimelineElement *child = (GESTimelineElement *) tmp->data;
 
     if (child != container->initiated_move) {
-      _set_inpoint0 (child, inpoint);
+      if (GES_FRAME_IS_VALID (finpoint))
+        ges_timeline_element_set_finpoint (GES_TIMELINE_ELEMENT (child),
+            finpoint);
+      else
+        ges_timeline_element_set_inpoint (GES_TIMELINE_ELEMENT (child),
+            inpoint);
     }
   }
   container->children_control_mode = GES_CHILDREN_UPDATE;
@@ -172,7 +183,8 @@ _set_inpoint (GESTimelineElement * element, GstClockTime inpoint)
 }
 
 static gboolean
-_set_duration (GESTimelineElement * element, GstClockTime duration)
+_set_duration_full (GESTimelineElement * element, GstClockTime duration,
+    GESFrameNumber fduration)
 {
   GList *tmp;
 
@@ -182,8 +194,14 @@ _set_duration (GESTimelineElement * element, GstClockTime duration)
   for (tmp = container->children; tmp; tmp = g_list_next (tmp)) {
     GESTimelineElement *child = (GESTimelineElement *) tmp->data;
 
-    if (child != container->initiated_move)
-      _set_duration0 (GES_TIMELINE_ELEMENT (child), duration);
+    if (child != container->initiated_move) {
+      if (GES_FRAME_IS_VALID (fduration))
+        ges_timeline_element_set_fduration (GES_TIMELINE_ELEMENT (child),
+            fduration);
+      else
+        ges_timeline_element_set_duration (GES_TIMELINE_ELEMENT (child),
+            duration);
+    }
   }
   container->children_control_mode = GES_CHILDREN_UPDATE;
 
@@ -191,13 +209,19 @@ _set_duration (GESTimelineElement * element, GstClockTime duration)
 }
 
 static gboolean
-_set_max_duration (GESTimelineElement * element, GstClockTime maxduration)
+_set_max_duration_full (GESTimelineElement * element, GstClockTime maxduration,
+    GESFrameNumber fmaxduration)
 {
   GList *tmp;
 
-  for (tmp = GES_CONTAINER (element)->children; tmp; tmp = g_list_next (tmp))
-    ges_timeline_element_set_max_duration (GES_TIMELINE_ELEMENT (tmp->data),
-        maxduration);
+  for (tmp = GES_CONTAINER (element)->children; tmp; tmp = g_list_next (tmp)) {
+    if (GES_FRAME_IS_VALID (fmaxduration))
+      ges_timeline_element_set_fmax_duration (GES_TIMELINE_ELEMENT (tmp->data),
+          fmaxduration);
+    else
+      ges_timeline_element_set_max_duration (GES_TIMELINE_ELEMENT (tmp->data),
+          maxduration);
+  }
 
   return TRUE;
 }
@@ -794,11 +818,11 @@ ges_clip_class_init (GESClipClass * klass)
   element_class->roll_start = _roll_start;
   element_class->roll_end = _roll_end;
   element_class->trim = _trim;
-  element_class->set_start = _set_start;
-  element_class->set_duration = _set_duration;
-  element_class->set_inpoint = _set_inpoint;
+  element_class->set_start_full = _set_start_full;
+  element_class->set_duration_full = _set_duration_full;
+  element_class->set_inpoint_full = _set_inpoint_full;
+  element_class->set_max_duration_full = _set_max_duration_full;
   element_class->set_priority = _set_priority;
-  element_class->set_max_duration = _set_max_duration;
   element_class->paste = _paste;
   element_class->deep_copy = _deep_copy;
   element_class->lookup_child = _lookup_child;
@@ -914,14 +938,25 @@ ges_clip_create_track_elements (GESClip * clip, GESTrackType type)
   _get_priority_range (GES_CONTAINER (clip), &min_prio, &max_prio);
   for (tmp = result; tmp; tmp = tmp->next) {
     GESTimelineElement *elem = tmp->data;
+    guint64 fstart = _FSTART (elem),
+        finpoint = _FINPOINT (elem),
+        fduration = _FDURATION (elem), fmaxduration = _FMAXDURATION (elem);
 
-    _set_start0 (elem, GES_TIMELINE_ELEMENT_START (clip));
-    _set_inpoint0 (elem, GES_TIMELINE_ELEMENT_INPOINT (clip));
-    _set_duration0 (elem, GES_TIMELINE_ELEMENT_DURATION (clip));
+    GES_FRAME_IS_VALID (fstart) ?
+        _set_fstart0 (elem, fstart) : _set_start0 (elem, _START (clip));
+    GES_FRAME_IS_VALID (finpoint) ?
+        _set_finpoint0 (elem, finpoint) : _set_inpoint0 (elem, _INPOINT (clip));
+    GES_FRAME_IS_VALID (fduration) ?
+        _set_fduration0 (elem, fduration) :
+        _set_duration0 (elem, _DURATION (clip));
 
-    if (GST_CLOCK_TIME_IS_VALID (GES_TIMELINE_ELEMENT_MAX_DURATION (clip)))
-      ges_timeline_element_set_max_duration (GES_TIMELINE_ELEMENT (elem),
-          GES_TIMELINE_ELEMENT_MAX_DURATION (clip));
+    if (GST_CLOCK_TIME_IS_VALID (GES_TIMELINE_ELEMENT_MAX_DURATION (clip))) {
+      if (GES_FRAME_IS_VALID (fmaxduration))
+        ges_timeline_element_set_fmax_duration (elem, fmaxduration);
+      else
+        ges_timeline_element_set_max_duration (GES_TIMELINE_ELEMENT (elem),
+            GES_TIMELINE_ELEMENT_MAX_DURATION (clip));
+    }
 
     _set_priority0 (elem, min_prio + clip->priv->nb_effects);
 

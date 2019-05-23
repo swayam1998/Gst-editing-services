@@ -1,27 +1,28 @@
 # tests and condition when to skip the test
 ges_tests = [
-    ['ges/asset'],
-    ['ges/backgroundsource'],
-    ['ges/basic'],
-    ['ges/layer'],
-    ['ges/effects'],
-    ['ges/uriclip'],
-    ['ges/clip'],
-    ['ges/timelineedition'],
-    ['ges/titles'],
-    ['ges/transition'],
-    ['ges/overlays'],
-    ['ges/mixers'],
-    ['ges/group'],
-    ['ges/project'],
-    ['ges/track'],
-    ['ges/tempochange'],
-    ['ges/negative'],
-    ['nle/simple'],
-    ['nle/complex'],
-    ['nle/nleoperation'],
-    ['nle/nlecomposition'],
-    ['nle/tempochange']
+    {'file': 'ges/asset'},
+    {'file': 'ges/backgroundsource'},
+    {'file': 'ges/basic'},
+    {'file': 'ges/layer'},
+    {'file': 'ges/effects'},
+    {'file': 'ges/uriclip'},
+    {'file': 'ges/clip'},
+    {'file': 'ges/timelineedition'},
+    {'file': 'ges/titles'},
+    {'file': 'ges/transition'},
+    {'file': 'ges/overlays'},
+    {'file': 'ges/mixers'},
+    {'file': 'ges/group'},
+    {'file': 'ges/project'},
+    {'file': 'ges/track'},
+    {'file': 'ges/tempochange'},
+    {'file': 'ges/timecode', 'objects': libges.extract_objects('ges-time-code.c')},
+    {'file': 'ges/negative'},
+    {'file': 'nle/simple'},
+    {'file': 'nle/complex'},
+    {'file': 'nle/nleoperation'},
+    {'file': 'nle/nlecomposition'},
+    {'file': 'nle/tempochange'},
 ]
 
 test_defines = [
@@ -44,13 +45,10 @@ if gst_dep.type_name() == 'pkgconfig'
 endif
 
 foreach t : ges_tests
-  fname = '@0@.c'.format(t.get(0))
-  test_name = t.get(0).underscorify()
-  if t.length() == 2
-    skip_test = t.get(1)
-  else
-    skip_test = false
-  endif
+  fname = '@0@.c'.format(t.get('file'))
+  test_name = t.get('file').underscorify()
+  skip_test = t.get('skip', false)
+  objects = t.get('objects', [])
 
   if not skip_test
     env = environment()
@@ -65,6 +63,7 @@ foreach t : ges_tests
         c_args : ges_c_args + test_defines,
         include_directories : [configinc],
         dependencies : libges_deps + [gstcheck_dep, ges_dep],
+        objects: objects
     )
     test(test_name, exe, env: env, timeout : 3 * 60)
   endif

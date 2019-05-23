@@ -71,7 +71,7 @@ main (gint argc, gchar * argv[])
 
   min_rippling_time = GST_CLOCK_TIME_NONE;
   max_rippling_time = 0;
-  ges_layer_set_auto_transition (layer, TRUE);
+  ges_timeline_set_auto_transition (timeline, TRUE);
   start_ripple = gst_util_get_timestamp ();
   for (i = 1; i < 501; i++) {
     start = gst_util_get_timestamp ();

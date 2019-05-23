@@ -149,7 +149,8 @@ _resync_start_offsets (GESTimelineElement * child,
  *                                                   *
  *****************************************************/
 static gboolean
-_set_start (GESTimelineElement * element, GstClockTime start)
+_set_start_full (GESTimelineElement * element, GstClockTime start,
+    GESFrameNumber fstart)
 {
   GList *tmp;
   ChildMapping *map;
@@ -171,7 +172,8 @@ _set_start (GESTimelineElement * element, GstClockTime start)
 }
 
 static gboolean
-_set_inpoint (GESTimelineElement * element, GstClockTime inpoint)
+_set_inpoint_full (GESTimelineElement * element, GstClockTime inpoint,
+    GESFrameNumber finpoint)
 {
   GList *tmp;
   GESContainer *container = GES_CONTAINER (element);
@@ -187,7 +189,8 @@ _set_inpoint (GESTimelineElement * element, GstClockTime inpoint)
 }
 
 static gboolean
-_set_duration (GESTimelineElement * element, GstClockTime duration)
+_set_duration_full (GESTimelineElement * element, GstClockTime duration,
+    GESFrameNumber fduration)
 {
   GList *tmp;
   GESContainer *container = GES_CONTAINER (element);
@@ -475,9 +478,9 @@ ges_container_class_init (GESContainerClass * klass)
       GES_TYPE_TIMELINE_ELEMENT);
 
 
-  element_class->set_start = _set_start;
-  element_class->set_duration = _set_duration;
-  element_class->set_inpoint = _set_inpoint;
+  element_class->set_start_full = _set_start_full;
+  element_class->set_duration_full = _set_duration_full;
+  element_class->set_inpoint_full = _set_inpoint_full;
   element_class->list_children_properties = _list_children_properties;
   element_class->lookup_child = _lookup_child;
   element_class->get_track_types = _get_track_types;

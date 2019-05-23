@@ -32,9 +32,10 @@ void ges_timeline_emit_snapping           (GESTimeline * timeline,
 gboolean timeline_tree_trim               (GNode *root,
                                            GESTimelineElement *element,
                                            gint64 layer_priority_offset,
-                                           GstClockTimeDiff offset,
+                                           gint64 offset,
                                            GESEdge edge,
-                                           GstClockTime snapping_distance);
+                                           GstClockTime snapping_distance,
+                                           gint64 in_frame);
 
 
 gboolean timeline_tree_move               (GNode *root,
@@ -42,7 +43,8 @@ gboolean timeline_tree_move               (GNode *root,
                                            gint64 layer_priority_offset,
                                            GstClockTimeDiff offset,
                                            GESEdge edge,
-                                           GstClockTime snapping_distance);
+                                           GstClockTime snapping_distance,
+                                           gint64 frames_diff);
 
 gboolean timeline_tree_roll               (GNode * root,
                                            GESTimelineElement * element,

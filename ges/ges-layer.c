@@ -37,6 +37,7 @@
 #include "ges-internal.h"
 #include "ges-layer.h"
 #include "ges.h"
+#include "ges-time-code.h"
 #include "ges-source-clip.h"
 
 static void ges_meta_container_interface_init
@@ -379,6 +380,45 @@ ges_layer_get_duration (GESLayer * layer)
   return duration;
 }
 
+/**
+ * ges_layer_get_fduration:
+ * @layer: The #GESLayer to get the duration from
+ *
+ * Lets you retrieve the duration of the layer in frames, which means
+ * the number of the last frame to be displayed
+ *
+ * Returns: The duration of a layer in frames.
+ * 
+ * Since: 1.18
+ */
+GstClockTime
+ges_layer_get_fduration (GESLayer * layer)
+{
+  GList *tmp;
+  guint64 duration = 0;
+  gint framerate_n, framerate_d;
+  GstVideoTimeCodeFlags flags;
+
+  g_return_val_if_fail (GES_IS_LAYER (layer), 0);
+
+  ges_timeline_get_timecodes_config (layer->timeline, &framerate_n,
+      &framerate_d, &flags);
+  for (tmp = layer->priv->clips_start; tmp; tmp = tmp->next) {
+    guint fstart = ges_timeline_element_get_fstart (tmp->data),
+        fduration = ges_timeline_element_get_fduration (tmp->data);
+
+    if (!GES_FRAME_IS_VALID (fstart) || !GES_FRAME_IS_VALID (fstart)) {
+      duration =
+          MAX (duration, ges_timestamp_get_frame (_END (tmp->data), framerate_n,
+              framerate_d, flags, FALSE));
+    } else {
+      duration = MAX (duration, fstart + fduration);
+    }
+  }
+
+  return duration;
+}
+
 static gboolean
 ges_layer_remove_clip_internal (GESLayer * layer, GESClip * clip,
     gboolean emit_removed)
@@ -691,8 +731,7 @@ ges_layer_add_clip (GESLayer * layer, GESClip * clip)
  * @duration: The duration value to set on the new #GESClip
  * @track_types: The #GESTrackType to set on the the new #GESClip
  *
- * Creates Clip from asset, adds it to layer and
- * returns a reference to it.
+ * Creates Clip from asset, adds it to layer and returns its pointer.
  *
  * Returns: (transfer none): Created #GESClip
  */
@@ -739,6 +778,79 @@ ges_layer_add_asset (GESLayer * layer,
 
   return clip;
 }
+
+/**
+ * ges_layer_add_fasset:
+ * @layer: a #GESLayer
+ * @asset: The asset to add to
+ * @start_frame: The start value in frame to set on the new #GESClip,
+ * if @start_FRAME == %GES_FRAME_NONE, it will be set to the current duration of @layer
+ * @inpoint_frame: The inpoint value in frame to set on the new #GESClip
+ * @duration_frame: The duration value in frame to set on the new #GESClip
+ * @track_types: The #GESTrackType to set on the the new #GESClip
+ *
+ * Creates Clip from asset, adds it to layer and returns its pointer.
+ *
+ * Returns: (transfer none): Created #GESClip
+ * 
+ * Since: 1.18
+ */
+GESClip *
+ges_layer_add_fasset (GESLayer * layer,
+    GESAsset * asset, guint64 start_frame, guint64 inpoint_frame,
+    guint64 duration_frame, GESTrackType track_types)
+{
+  GESClip *clip;
+  gint fps_n, fps_d;
+  GstVideoTimeCodeFlags flags;
+
+  g_return_val_if_fail (GES_IS_LAYER (layer), NULL);
+  g_return_val_if_fail (GES_IS_ASSET (asset), NULL);
+  g_return_val_if_fail (g_type_is_a (ges_asset_get_extractable_type
+          (asset), GES_TYPE_CLIP), NULL);
+  g_return_val_if_fail (layer->timeline, NULL);
+  g_return_val_if_fail (ges_timeline_get_timecodes_config (layer->timeline,
+          &fps_n, &fps_d, &flags), NULL);
+
+  GST_DEBUG_OBJECT (layer, "Adding asset %s with: start: %" G_GUINT64_FORMAT
+      " inpoint: %" G_GUINT64_FORMAT " duration: %" G_GUINT64_FORMAT
+      " at %d/%dfps - track types: %d (%s)", ges_asset_get_id (asset),
+      start_frame, inpoint_frame, duration_frame, track_types,
+      fps_n, fps_d, ges_track_type_name (track_types));
+
+  clip = GES_CLIP (ges_asset_extract (asset, NULL));
+
+  if (!GES_FRAME_IS_VALID (start_frame)) {
+    start_frame = ges_layer_get_fduration (layer);
+
+    GST_DEBUG_OBJECT (layer, "No start specified, setting it to %"
+        G_GUINT64_FORMAT, start_frame);
+  }
+
+  ges_timeline_element_set_fstart (GES_TIMELINE_ELEMENT (clip), start_frame);
+  ges_timeline_element_set_finpoint (GES_TIMELINE_ELEMENT (clip),
+      inpoint_frame);
+  if (GES_FRAME_IS_VALID (duration_frame))
+    ges_timeline_element_set_fduration (GES_TIMELINE_ELEMENT (clip),
+        duration_frame);
+
+  if (track_types != GES_TRACK_TYPE_UNKNOWN)
+    ges_clip_set_supported_formats (clip, track_types);
+
+  if (!ges_layer_add_clip (layer, clip))
+    return NULL;
+
+  if (!ges_timeline_element_reset_framerate_on_edge (GES_TIMELINE_ELEMENT
+          (clip), GES_EDGE_NONE, TRUE)) {
+      GST_INF_OBJECT(layer, "Could not set clip timing in frames");
+      ges_layer_remove_clip(layer, clip);
+
+      return NULL;
+  }
+
+  return clip;
+}
+
 
 /**
  * ges_layer_new:

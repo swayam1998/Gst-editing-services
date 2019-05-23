@@ -93,30 +93,30 @@ class TestTimeline(common.GESSimpleTimelineTest):
         clip2 = self.add_clip(50, 0, 100)
         self.assertTimelineTopology([
             [  # Unique layer
-                (GES.TestClip, 0, 100),
-                (GES.TransitionClip, 50, 50),
-                (GES.TestClip, 50, 100)
+                (GES.TestClip, 0, 0, 100),
+                (GES.TransitionClip, 50, 0, 50),
+                (GES.TestClip, 50, 0, 100)
             ]
         ])
 
         clip1.split(25)
         self.assertTimelineTopology([
             [  # Unique layer
-                (GES.TestClip, 0, 25),
-                (GES.TestClip, 25, 75),
-                (GES.TransitionClip, 50, 50),
-                (GES.TestClip, 50, 100),
+                (GES.TestClip, 0, 0, 25),
+                (GES.TestClip, 25, 25, 75),
+                (GES.TransitionClip, 50, 0, 50),
+                (GES.TestClip, 50, 0, 100),
             ]
         ])
 
         clip2.split(125)
         self.assertTimelineTopology([
             [  # Unique layer
-                (GES.TestClip, 0, 25),
-                (GES.TestClip, 25, 75),
-                (GES.TransitionClip, 50, 50),
-                (GES.TestClip, 50, 75),
-                (GES.TestClip, 125, 25),
+                (GES.TestClip, 0, 0, 25),
+                (GES.TestClip, 25, 25, 75),
+                (GES.TransitionClip, 50, 0, 50),
+                (GES.TestClip, 50, 0, 75),
+                (GES.TestClip, 125, 75, 25),
             ]
         ])
 
@@ -485,6 +485,7 @@ class TestInvalidOverlaps(common.GESSimpleTimelineTest):
         clip1 = self.add_clip(start=9, in_point=0, duration=2)
         clip2 = self.add_clip(start=10, in_point=0, duration=2)
 
+        Gst.error("ah")
         self.assertFalse(clip1.set_start(10))
         self.assertFalse(clip1.edit([], -1, GES.EditMode.EDIT_TRIM, GES.Edge.EDGE_END, clip2.props.start + clip2.props.duration))
         self.assertFalse(clip1.ripple_end(clip2.props.start + clip2.props.duration))

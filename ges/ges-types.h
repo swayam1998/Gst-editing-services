@@ -36,6 +36,34 @@ G_BEGIN_DECLS
  */
 #define GES_PADDING_LARGE   20
 
+
+/**
+ * GESFrameNumber:
+ *
+ * A datatype to hold a frame number.
+ */
+typedef gint64 GESFrameNumber;
+
+/**
+ * GES_FRAME_NONE: (value 9223372036854775807) (type GESFrameNumber)
+ *
+ * Constant to define an undefined clock time.
+ */
+#define GES_FRAME_NONE             ((gint64) G_GINT64_CONSTANT(0x7fffffffffffffff))
+
+/**
+ * GES_FRAME_IS_VALID:
+ * Tests if a given GESFrameNumber represents a valid frame
+ */
+#define GES_FRAME_IS_VALID(frames) (((GESFrameNumber) frames) != GES_FRAME_NONE)
+
+/**
+ * GES_TYPE_FRAME_NUMBER:
+ *
+ * The #GType of a #GESFrameNumber.
+ */
+#define GES_TYPE_FRAME_NUMBER G_TYPE_UINT64
+
 /* Type definitions */
 
 typedef struct _GESTimeline GESTimeline;
